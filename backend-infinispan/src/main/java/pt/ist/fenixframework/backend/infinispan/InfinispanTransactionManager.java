@@ -167,7 +167,11 @@ public class InfinispanTransactionManager implements TransactionManager {
 			logger.error("Exception while aborting transaction");
 			ex.printStackTrace();
 		    }
-		}
+		} else {
+                    synchronized (this) {
+                        txCounter++;
+                    }
+                }
 	    }
 	    // Pedro had this wait here. Why?
 	    // waitingBeforeRetry();
@@ -234,4 +238,7 @@ public class InfinispanTransactionManager implements TransactionManager {
 	listeners.remove(listener);
     }
 
+    @Override
+    public long getCounter() { return txCounter; }
+    public static long txCounter = 0;
 }

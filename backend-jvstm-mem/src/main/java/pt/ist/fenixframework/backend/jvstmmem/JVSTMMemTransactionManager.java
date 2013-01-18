@@ -101,5 +101,8 @@ public class JVSTMMemTransactionManager implements TransactionManager {
     @Override
     public void removeCommitListener(CommitListener listener) {}
 
+    @Override
+    public long getCounter() { return txCounter; }
+    public static long txCounter = 0;
 
 }

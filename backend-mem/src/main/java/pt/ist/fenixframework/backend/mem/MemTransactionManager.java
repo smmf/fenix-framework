@@ -120,4 +120,9 @@ public class MemTransactionManager extends AbstractTransactionManager {
 	this.transaction.rollback();
 	this.transaction = null;
     }
+
+    @Override
+    public long getCounter() { return txCounter; }
+    public static long txCounter = 0;
+
 }

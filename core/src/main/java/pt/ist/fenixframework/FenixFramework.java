@@ -112,8 +112,24 @@ public class FenixFramework {
      * can only be invoked after the framework is initialized. */
     private static DomainModel domainModel = null;
 
+    public static class Stats implements Runnable {
+        private long previous = 0;
+
+        public void run() {
+            while (true) {
+                try { Thread.currentThread().sleep(1000); } catch (Exception e) { /*ignore */}
+                long current = getTransactionManager().getCounter();
+                long diff = current - previous;
+                System.err.println("===============================================  Transactions/second: " + diff + " (total:" + current + ")");
+                previous = current;
+            }
+        }
+    }
+
     // private static Logger logger = null;
     static {
+        new Thread(new Stats()).start();
+
         // System.out.println("out.ERROR?: " + logger.isErrorEnabled());
         // System.out.println("out.WARN?: " + logger.isWarnEnabled());
         // System.out.println("out.INFO?: " + logger.isInfoEnabled());

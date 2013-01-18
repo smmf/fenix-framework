@@ -272,5 +272,8 @@ public class OgmTransactionManager implements TransactionManager {
 	listeners.remove(listener);
     }
 
+    @Override
+    public long getCounter() { return 0; }
+
 }
 

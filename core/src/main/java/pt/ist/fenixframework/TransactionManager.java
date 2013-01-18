@@ -99,4 +99,6 @@ public interface TransactionManager extends javax.transaction.TransactionManager
      */
     public void removeCommitListener(CommitListener listener);
 
+    public long getCounter();
+
 }
