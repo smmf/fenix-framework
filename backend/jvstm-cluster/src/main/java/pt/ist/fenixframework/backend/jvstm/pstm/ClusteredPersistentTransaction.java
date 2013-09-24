@@ -117,7 +117,7 @@ public class ClusteredPersistentTransaction extends PersistentTransaction {
     of remote commits may become skewed then it's because the thread that processed
     the messages is being allowed to execute after the global global lock has been
     released */
-    private static int debug_hazelcast_last_commit_seen = Transaction.getMostRecentCommitedNumber();
+    public static int debug_hazelcast_last_commit_seen = Transaction.getMostRecentCommitedNumber();
 
     /* this method only returns after having applied all remote commits up until
     the mostRecentGlobalTxNum. This way we ensure that no earlier remote commit
