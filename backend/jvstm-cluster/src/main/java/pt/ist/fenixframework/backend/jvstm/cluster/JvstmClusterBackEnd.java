@@ -84,6 +84,7 @@ public abstract class JvstmClusterBackEnd extends JVSTMBackEnd {
     public void shutdown() {
         getRepository().closeRepository();
         ClusterUtils.shutdown();
+        ClusteredPersistentTransaction.debug_hazelcast_last_commit_seen = 0;
         super.shutdown();
     }
 
