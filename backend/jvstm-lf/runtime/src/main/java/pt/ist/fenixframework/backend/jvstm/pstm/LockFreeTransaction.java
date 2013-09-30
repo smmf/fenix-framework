@@ -161,18 +161,15 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     world, which improves the chances of a write transaction committing successfully
     */
     private ActiveTransactionsRecord processCommitRequests() {
-        /* by reading tail only after reading head, we ensure that tail is greater
-        than or equal to the current Request*/
-        CommitRequest currentRequest = LockFreeClusterUtils.getCommitRequestAtHead();
-        CommitRequest tail = LockFreeClusterUtils.getCommitRequestsTail();
+        // get a transaction and invoke its commit.
 
-        if (currentRequest != tail) {
-            try {
-                tryCommit(currentRequest, tail.getId());
-            } catch (CommitException e) {
-                /* just the ignore the possibility that the tail transaction that
-                I'm helping to commit may be invalid */
+        CommitRequest current = LockFreeClusterUtils.getCommitRequestAtHead();
+        while (current != null) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Will handle commit request: {}", current);
             }
+
+            current = current.handle();
         }
 
         /* return the newest record there is. This is safe, and we don't really
