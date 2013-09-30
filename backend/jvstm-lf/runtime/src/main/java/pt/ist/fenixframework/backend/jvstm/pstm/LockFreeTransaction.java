@@ -136,11 +136,12 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     // called when a read from a box detects there is already a newer version.
     @Override
     protected <T> VBoxBody<T> newerVersionDetected(VBoxBody<T> body) {
-        if (!this.boxesWritten.isEmpty() || !this.boxesWrittenInPlace.isEmpty()) {
-            return super.newerVersionDetected(body);
-        } else {
+        // Ill-programmed code such as RadarGun will note handle well an exception mid-transaction :-(
+//        if (!this.boxesWritten.isEmpty() || !this.boxesWrittenInPlace.isEmpty()) {
+//            return super.newerVersionDetected(body);
+//        } else {
             return body.getBody(number);
-        }
+//        }
     }
 
     @Override
