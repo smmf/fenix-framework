@@ -67,11 +67,13 @@ public class InitTransaction extends LockFreeTransaction {
         int versionToLookup = this.existingVersion + 1;
         String myRequestIdString = this.myRequestId.toString();
         String commitId;
+        int tries = 0;
         do {
             commitId = JvstmLockFreeBackEnd.getInstance().getRepository().getCommitIdFromVersion(versionToLookup);
             if (commitId != null) {
                 // next try, if needed, will be for a higher version
                 versionToLookup++;
+                tries = 0;
             } else {
                 logger.info("Waiting for version {} to have a commitId", versionToLookup);
                 // wait a little before retrying
@@ -81,7 +83,11 @@ public class InitTransaction extends LockFreeTransaction {
                     e.printStackTrace();
                 }
             }
-        } while (!myRequestIdString.equals(commitId));
+        } while (!myRequestIdString.equals(commitId) && ++tries < 10);
+
+        if (tries >= 10) {
+            throw new Error("INIT transaction failed because of programmer HACK!!!. Please increase or remove 'tries'");
+        }
 
         /* versionToLookup-1 is the version in which we found our initialization
         commit persisted.  When we see that number set in the repository, it's
@@ -100,5 +106,4 @@ public class InitTransaction extends LockFreeTransaction {
 
         return lastProcessedRequest;
     }
-
 }

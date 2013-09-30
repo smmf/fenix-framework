@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import pt.ist.fenixframework.backend.jvstm.JVSTMConfig;
 import pt.ist.fenixframework.backend.jvstm.lf.JvstmLockFreeConfig;
 import pt.ist.fenixframework.backend.jvstm.lf.SimpleWriteSet;
+import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.DomainClassInfo;
 import pt.ist.fenixframework.backend.jvstm.pstm.VBox;
 import pt.ist.fenixframework.backend.jvstm.pstm.VersionedValue;
@@ -228,6 +229,12 @@ public class LockFreeRepository implements ExtendedRepository {
     // returns the highest committed transaction number stored in the data grid
     @Override
     public synchronized int getMaxCommittedTxNumber() {
+        return 0;
+    }
+
+    /* I must consider what this method is doing when I implement the consolidation
+    thread(s). The implementation above is a HACK. */
+    public synchronized int getMaxCommittedTxNumberKeep() {
         return doWithinBackingTransactionIfNeeded(new Callable<Integer>() {
 
             class Interval {
@@ -517,11 +524,17 @@ public class LockFreeRepository implements ExtendedRepository {
     }
 
     @Override
+    @Deprecated
+    // Used only in the bootstrap of a node in InitTransaction
     public String getCommitIdFromVersion(final int txVersion) {
         return doWithinBackingTransactionIfNeeded(new Callable<String>() {
             @Override
             public String call() {
-                String commitId = getCommitIdForVersion(txVersion);
+                String commitId = LockFreeRepository.this.dataGrid.get(txVersion);
+
+                /* Before the HACK I was reusing getCommitIdForVersion(int) in the line below */
+                // String commitId = getCommitIdForVersion(txVersion);
+
                 logger.debug("getCommitIdFromVersion: {{}}->{{}}", txVersion, commitId);
                 return commitId;
             }
@@ -670,7 +683,19 @@ public class LockFreeRepository implements ExtendedRepository {
     }
 
     private String getCommitIdForVersion(int versionToLoad) {
-        String commitId = LockFreeRepository.this.dataGrid.get(versionToLoad);
+//        String commitId = LockFreeRepository.this.dataGrid.get(versionToLoad);
+//        return commitId;
+
+        // HACK
+        String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(versionToLoad);
+        if (commitId != null) {
+            return commitId;
+        } else if (versionToLoad < CommitOnlyTransaction.HACK_MAX_VERSION_TO_PERSIST) {
+            commitId = LockFreeRepository.this.dataGrid.get(versionToLoad);
+        } else {
+            logger.error("Cannot find commitId for version: ", versionToLoad);
+            throw new Error("Cannot find commitId for version: " + versionToLoad);
+        }
         return commitId;
     }
 

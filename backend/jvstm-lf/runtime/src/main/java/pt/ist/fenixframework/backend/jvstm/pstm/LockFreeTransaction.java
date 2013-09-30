@@ -564,12 +564,19 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
 
             int txVersion = recordToCommit.transactionNumber;
-            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
 
+            if (txVersion < CommitOnlyTransaction.HACK_MAX_VERSION_TO_PERSIST) { // HACK
+                String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+
+                JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
+            }
+            /* HACK: code removed to test the need to persist this info */
+            /*
             if (commitId != null) { // may be null if it was already persisted 
                 JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
                 CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
             }
+            */
             super.helpCommit(recordToCommit);
         } else {
             logger.debug("Version {} was already fully committed", recordToCommit.transactionNumber);

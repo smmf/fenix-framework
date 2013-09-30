@@ -21,6 +21,8 @@ import pt.ist.fenixframework.backend.jvstm.lf.JvstmLockFreeBackEnd;
 
 public abstract class CommitOnlyTransaction extends TopLevelTransaction {
 
+    public static final int HACK_MAX_VERSION_TO_PERSIST = 20;
+
     private static final Logger logger = LoggerFactory.getLogger(CommitOnlyTransaction.class);
 
     private static final long commitTxRecordOffset = UtilUnsafe.objectFieldOffset(TopLevelTransaction.class, "commitTxRecord");
@@ -393,12 +395,19 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
             logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
 
             int txVersion = recordToCommit.transactionNumber;
-            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
 
+            if (txVersion < HACK_MAX_VERSION_TO_PERSIST) { // HACK
+                String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+
+                JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
+            }
+            /* HACK: code removed to test the need to persist this info */
+            /*
             if (commitId != null) { // may be null if it was already persisted 
                 JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
                 CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
             }
+            */
             super.helpCommit(recordToCommit);
         } else {
             logger.debug("Version {} was already fully committed", recordToCommit.transactionNumber);
