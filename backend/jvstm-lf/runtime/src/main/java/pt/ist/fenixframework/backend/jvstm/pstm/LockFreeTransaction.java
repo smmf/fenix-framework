@@ -292,7 +292,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             // the rest are full
             for (jvstm.VBox[] ar : bodiesRead.rest()) {
                 for (int i = 0; i < ar.length; i++) {
-                    String vboxId = ((VBox) array[i]).getId();
+                    String vboxId = ((VBox) ar[i]).getId();
                     vboxIds.add(vboxId);
                 }
             }
