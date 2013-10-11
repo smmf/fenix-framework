@@ -41,6 +41,20 @@ public abstract class JvstmClusterConfig extends JVSTMConfig {
         return (JvstmClusterBackEnd) this.backEnd;
     }
 
+    @Override
+    protected void init() {
+
+        this.backEnd.getRepository().initBare(this);
+
+        /* By this point we should already have done the minimum repository
+        initialization, but not have written anything to it yet.   In case of a
+        distributed data grid, this will enable the nodes to see each other
+        before any updates begin to occur.  The following call will commence to
+        update data in the repository. */
+
+        super.init();
+    }
+
     public com.hazelcast.config.Config getHazelcastConfig() {
         System.setProperty("hazelcast.logging.type", "slf4j");
         com.hazelcast.config.Config hzlCfg = new ClasspathXmlConfig(getHazelcastConfigFile());

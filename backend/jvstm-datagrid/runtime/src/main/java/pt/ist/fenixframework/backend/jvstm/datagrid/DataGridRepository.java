@@ -50,14 +50,17 @@ public class DataGridRepository implements Repository {
     private int maxCommittedTxId = -1;
 
     @Override
-    public boolean init(JVSTMConfig jvstmConfig) {
+    public void initBare(JVSTMConfig jvstmConfig) {
         try {
             initConcreteDataGrid((JvstmDataGridConfig) jvstmConfig);
         } catch (Exception e) {
             logger.error("Failed to initialize data grid: {}", e);
             throw new RuntimeException(e);
         }
+    }
 
+    @Override
+    public boolean init(JVSTMConfig jvstmConfig) {
         return bootstrapIfNeeded();
     }
 

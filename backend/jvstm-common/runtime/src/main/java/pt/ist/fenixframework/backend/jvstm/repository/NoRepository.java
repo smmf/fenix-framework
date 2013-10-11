@@ -70,6 +70,10 @@ public class NoRepository implements Repository {
     }
 
     @Override
+    public void initBare(JVSTMConfig jvstmConfig) {
+    }
+
+    @Override
     public boolean init(JVSTMConfig jvstmConfig) {
         return true;
     }

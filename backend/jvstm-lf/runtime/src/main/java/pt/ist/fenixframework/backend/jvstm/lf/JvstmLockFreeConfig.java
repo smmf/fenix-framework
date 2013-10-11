@@ -69,6 +69,15 @@ public class JvstmLockFreeConfig extends JVSTMConfig {
     protected void init() {
         JvstmLockFreeBackEnd thisBackEnd = new JvstmLockFreeBackEnd();
         super.backEnd = thisBackEnd;
+
+        this.backEnd.getRepository().initBare(this);
+
+        /* By this point we should already have done the minimum repository
+        initialization, but not have written anything to it yet.   In case of a
+        distributed data grid, this will enable the nodes to see each other
+        before any updates begin to occur.  The following call will commence to
+        update data in the repository. */
+
         super.init(); // this will in turn initialize our backend
     }
 

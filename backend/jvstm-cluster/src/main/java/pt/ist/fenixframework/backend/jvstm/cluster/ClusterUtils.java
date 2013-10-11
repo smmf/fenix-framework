@@ -8,6 +8,7 @@
 package pt.ist.fenixframework.backend.jvstm.cluster;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,7 @@ import pt.ist.fenixframework.core.TransactionError;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.IAtomicLong;
+import com.hazelcast.core.ICountDownLatch;
 import com.hazelcast.core.ITopic;
 import com.hazelcast.core.Message;
 import com.hazelcast.core.MessageListener;
@@ -44,6 +46,21 @@ public class ClusterUtils {
 
         // register listener for remote commits
         registerListenerForRemoteCommits();
+
+        /* some repositories may not implement correctly the initial state
+        transfer mechanism.  So, we wait until the initial number of nodes is
+        up before continuing with the initialization.  This allows us to work
+        with "initially-stateless" repositories in addition to the 'normal'
+        state-transfer-enabled ones. */
+
+        int expectedInitialNodes = thisConfig.getExpectedInitialNodes();
+        if (expectedInitialNodes > 1) {
+            logger.info("Waiting for the initial number of nodes: {}", expectedInitialNodes);
+
+            waitForMembers("backend-jvstm-cluster-init-barrier", expectedInitialNodes);
+
+            logger.info("All initial nodes are available");
+        }
     }
 
     private static void registerListenerForRemoteCommits() {
@@ -233,6 +250,52 @@ public class ClusterUtils {
             return getHazelcastInstance().getCluster().getMembers().size();
         }
 
+    }
+
+    /* This is intended as a replacement for JGroup's-based implementation of
+    Config.waitForExpectedInitialNodes(). */
+    public static void waitForMembers(String barrierName, int members) {
+        while (true) {
+            logger.info("Waiting at the barrier for {} member(s)", members);
+            try {
+                boolean success = barrier(barrierName, members);
+                if (success) {
+                    logger.info("All {} member(s) have awaited at the barrier {}", members, barrierName);
+                    return;
+                } else {
+                    logger.info("Await at {} timedout. Will awaiting again...", barrierName);
+                }
+            } catch (InterruptedException e) {
+                logger.info("Await at {} was interrupted. Will awaiting again. Exception: {}", barrierName, e);
+            }
+        }
+    }
+
+    private static synchronized ICountDownLatch getCountDownLatch(String latchName) {
+        HazelcastInstance hzl = getHazelcastInstance();
+
+        if (hzl == null) {
+            String msg = "No Hazelcast instance available!";
+            logger.error(msg);
+            throw new Error(msg);
+        }
+
+        return hzl.getCountDownLatch(latchName);
+    }
+
+    public static boolean barrier(String barrierName, int awaitSize) throws InterruptedException {
+        ICountDownLatch barrier = getCountDownLatch(barrierName);
+
+        boolean reset = barrier.trySetCount(awaitSize);
+        if (reset) {
+            logger.debug("Reset barrier: {} to: {}", barrierName, awaitSize);
+        } else {
+            logger.debug("Barrier: {} was already set by another member", barrierName);
+        }
+        logger.debug("Awaiting at barrier: {}", barrierName);
+
+        barrier.countDown();
+        return barrier.await(Long.MAX_VALUE, TimeUnit.DAYS);
     }
 
 }
