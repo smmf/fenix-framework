@@ -268,13 +268,17 @@ public class InfinispanRepository implements Repository {
     /* implementation of the Repository interface */
 
     @Override
-    public boolean init(JVSTMConfig jvstmConfig) {
+    public void initBare(JVSTMConfig jvstmConfig) {
         String ispnConfigFile = ((JvstmIspnConfig) jvstmConfig).getIspnConfigFile();
 
         createCacheContainer(ispnConfigFile);
         initTransactionManager();
         createSystemCache();
         createDomainCache();
+    };
+
+    @Override
+    public boolean init(JVSTMConfig jvstmConfig) {
         return bootstrapIfNeeded();
     }
 

@@ -45,6 +45,9 @@ public interface Repository {
     // creates a repository bootstrap instance
 //    public RepositoryBootstrap createRepositoryBootstrap(Config config);
 
+    /** Initialize the Repository without writing anything to it. */
+    public void initBare(JVSTMConfig jvstmConfig);
+
     // initialize this repository instance given a configuration
     // returns whether the repository is new, so that we know we need to create the DomainRoot
     public boolean init(JVSTMConfig jvstmConfig);
