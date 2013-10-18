@@ -68,7 +68,7 @@ public class LockFreeRepository implements ExtendedRepository {
     /**
      * Number of attempts to perform a repository transaction
      */
-    private static final int MAX_TX_ATEMPTS = 10;
+    private static final int MAX_TX_ATEMPTS = 5;
 
     private static final long bodyValueOffset = UtilUnsafe.objectFieldOffset(VBoxBody.class, "value");
 
@@ -334,7 +334,7 @@ public class LockFreeRepository implements ExtendedRepository {
                 if (attempts++ < MAX_TX_ATEMPTS) {
                     logger.warn("Will retry (attemp {}) failed transaction: {}", attempts, e);
                 } else {
-                    logger.error("Giving up. Could not perform data grid operation.");
+                    logger.warn("Giving up. Could not perform data grid operation.");
                     throw new PersistenceException(e);
                 }
             } finally {
@@ -352,7 +352,7 @@ public class LockFreeRepository implements ExtendedRepository {
                         if (commandFinished && (attempts++ < MAX_TX_ATEMPTS)) {
                             logger.warn("Will retry (attempt {}) failed {}: {}", attempts, op, e);
                         } else {
-                            logger.error("Giving up. Could not {} to data grid", op);
+                            logger.warn("Giving up. Could not {} to data grid", op);
                             throw new PersistenceException(e);
                         }
                     }
@@ -491,13 +491,26 @@ public class LockFreeRepository implements ExtendedRepository {
 
         logger.debug("mapTxVersionToCommitId: {{}}->{{}}", txVersion, commitId);
 
-        doWithinBackingTransactionIfNeeded(new Callable<Void>() {
-            @Override
-            public Void call() {
-                LockFreeRepository.this.dataGrid.putIfAbsent(txVersion, commitId.toString());
-                return null;
+        /* This method tries forever.  Alternative is to just quit. :-( */
+        int count = 0;
+        while (true) {
+            try {
+                doWithinBackingTransactionIfNeeded(new Callable<Void>() {
+                    @Override
+                    public Void call() {
+                        LockFreeRepository.this.dataGrid.putIfAbsent(txVersion, commitId.toString());
+                        return null;
+                    }
+                });
+                return;
+            } catch (RuntimeException e) {
+                logger.debug("Trying again (indefinitely) to mapTxVersionToCommitId: {{}}->{{}}.", txVersion, commitId);
+                if (++count % 50 == 0) {
+                    logger.error("Dangerous failure in DataGrid running mapTxVersionToCommitId: {{}}->{{}}.  {} attempts...",
+                            txVersion, commitId, count);
+                }
             }
-        });
+        }
     }
 
     @Override
