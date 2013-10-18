@@ -346,6 +346,8 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
         }
 
         // EVERYONE MUST TRY THIS, to ensure visibility when looking it up ahead.
+        logger.debug("Associating tx version {} to commitId {}.", commitRecord.transactionNumber, this.commitRequest.getId()
+                .toString());
         txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId());
     }
 

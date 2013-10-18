@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import pt.ist.fenixframework.backend.jvstm.JVSTMConfig;
 
 import com.hazelcast.config.ClasspathXmlConfig;
+import com.hazelcast.config.TopicConfig;
 
 /**
  * This is the configuration manager used by the fenix-framework-backend-jvstm-lf-cluster project.
@@ -106,6 +107,14 @@ public class JvstmLockFreeConfig extends JVSTMConfig {
         System.setProperty("hazelcast.logging.type", "slf4j");
         com.hazelcast.config.Config hzlCfg = new ClasspathXmlConfig(getHazelcastConfigFile());
         hzlCfg.getGroupConfig().setName(HAZELCAST_FF_GROUP_NAME);
+
+        // turn on global ordering for the commit topic
+        TopicConfig topicConfig = hzlCfg.getTopicConfig(LockFreeClusterUtils.FF_COMMIT_TOPIC_NAME);
+        topicConfig.setGlobalOrderingEnabled(true);
+        hzlCfg.addTopicConfig(topicConfig);
+
+        topicConfig = hzlCfg.getTopicConfig(LockFreeClusterUtils.FF_COMMIT_TOPIC_NAME);
+
         return hzlCfg;
     }
 

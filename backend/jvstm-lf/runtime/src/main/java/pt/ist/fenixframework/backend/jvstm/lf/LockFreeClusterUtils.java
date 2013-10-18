@@ -29,7 +29,7 @@ public class LockFreeClusterUtils {
 //    private static final String FF_GLOBAL_LOCK_NAME = "ff.hzl.global.lock";
 //    private static final String FF_GLOBAL_LOCK_NUMBER_NAME = "ff.hzl.global.lock.number";
 //    private static final long FF_GLOBAL_LOCK_LOCKED_VALUE = -1;
-    private static final String FF_COMMIT_TOPIC_NAME = "ff.hzl.commits";
+    public static final String FF_COMMIT_TOPIC_NAME = "ff.hzl.commits";
 
     private static HazelcastInstance HAZELCAST_INSTANCE;
 
