@@ -329,6 +329,14 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
     protected void enqueueValidCommit(ActiveTransactionsRecord lastCheck, WriteSet writeSet) {
         ActiveTransactionsRecord commitRecord = this.getCommitTxRecord();
 
+        /* EVERYONE Must try to *putIfAbsent*, to ensure visibility of the
+            entry when looking it up ahead.  AND, it must be done before enqueuing
+            the ActiveTxRecord, so that whoever reads the volatile 'next' from
+            the previous record is guaranteed to the see this mapping. */
+        txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId());
+        logger.debug("Associating tx version {} to commitId {}.", commitRecord.transactionNumber, this.commitRequest.getId()
+                .toString());
+
         /* Here we know that our commit is valid.  However, we may have concluded
         such result via some helper AND even have seen already our record enqueued
         and committed. So we need to check for that to skip enqueuing. */
@@ -345,10 +353,6 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
             }
         }
 
-        // EVERYONE MUST TRY THIS, to ensure visibility when looking it up ahead.
-        logger.debug("Associating tx version {} to commitId {}.", commitRecord.transactionNumber, this.commitRequest.getId()
-                .toString());
-        txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId());
     }
 
     /* The commitTxRecord can only be set once */
