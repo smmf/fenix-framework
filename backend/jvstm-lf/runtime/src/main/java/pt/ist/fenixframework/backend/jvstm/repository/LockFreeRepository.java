@@ -498,7 +498,10 @@ public class LockFreeRepository implements ExtendedRepository {
                 doWithinBackingTransactionIfNeeded(new Callable<Void>() {
                     @Override
                     public Void call() {
-                        LockFreeRepository.this.dataGrid.putIfAbsent(txVersion, commitId.toString());
+                        if (commitId == null) {
+                            logger.warn("Mapping tx {} to NULL commitId!", txVersion);
+                        }
+                        LockFreeRepository.this.dataGrid.putIfAbsent(txVersion, commitId);
                         return null;
                     }
                 });
