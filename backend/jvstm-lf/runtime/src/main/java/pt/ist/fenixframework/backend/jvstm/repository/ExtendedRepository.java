@@ -8,7 +8,7 @@ public interface ExtendedRepository extends Repository {
 
     void persistWriteSet(UUID commitId, SimpleWriteSet writeSet, Object nullObject);
 
-    void mapTxVersionToCommitId(int txVersion, UUID commitId);
+    void mapTxVersionToCommitId(int txVersion, String commitId);
 
     /**
      * Get the String representation of the commitId belonging to the given version.
