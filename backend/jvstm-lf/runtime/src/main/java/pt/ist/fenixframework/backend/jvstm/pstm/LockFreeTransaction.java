@@ -288,8 +288,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
             // the rest are full
             for (jvstm.VBox[] ar : bodiesRead.rest()) {
-                for (int i = 0; i < ar.length; i++) {
-                    String vboxId = ((VBox) ar[i]).getId();
+                for (jvstm.VBox element : ar) {
+                    String vboxId = ((VBox) element).getId();
                     vboxIds.add(vboxId);
                 }
             }
@@ -388,7 +388,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
 
             int txVersion = recordToCommit.transactionNumber;
-            UUID commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
 
             if (commitId != null) { // may be null if it was already persisted 
                 JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);

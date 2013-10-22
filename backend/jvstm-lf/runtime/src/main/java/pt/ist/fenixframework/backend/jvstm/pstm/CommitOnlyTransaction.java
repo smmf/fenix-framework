@@ -40,7 +40,8 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
 
 //    private final WriteSet writeSet = STUB_WRITE_SET;
 
-    public static final ConcurrentHashMap<Integer, UUID> txVersionToCommitIdMap = new ConcurrentHashMap<Integer, UUID>();
+    public static final ConcurrentHashMap<Integer, String> txVersionToCommitIdMap =
+            new ConcurrentHashMap<Integer, String>(100000);
 
 //    private boolean readOnly = false;
 
@@ -333,7 +334,7 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
             entry when looking it up ahead.  AND, it must be done before enqueuing
             the ActiveTxRecord, so that whoever reads the volatile 'next' from
             the previous record is guaranteed to the see this mapping. */
-        txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId());
+        txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId().toString());
         logger.debug("Associating tx version {} to commitId {}.", commitRecord.transactionNumber, this.commitRequest.getId()
                 .toString());
 
@@ -376,7 +377,7 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
             logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
 
             int txVersion = recordToCommit.transactionNumber;
-            UUID commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
 
             if (commitId != null) { // may be null if it was already persisted 
                 JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);

@@ -486,7 +486,7 @@ public class LockFreeRepository implements ExtendedRepository {
     }
 
     @Override
-    public void mapTxVersionToCommitId(final int txVersion, final UUID commitId) {
+    public void mapTxVersionToCommitId(final int txVersion, final String commitId) {
         /* Store txVersion --> commitId */
 
         logger.debug("mapTxVersionToCommitId: {{}}->{{}}", txVersion, commitId);
