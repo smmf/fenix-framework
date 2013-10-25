@@ -8,6 +8,8 @@
 package pt.ist.fenixframework.backend.jvstm.lf;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -17,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
+import pt.ist.fenixframework.backend.jvstm.pstm.CommitRequestListener;
 import pt.ist.fenixframework.backend.jvstm.pstm.LocalCommitOnlyTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.LockFreeTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.RemoteCommitOnlyTransaction;
@@ -32,7 +35,7 @@ public class CommitRequest implements DataSerializable {
     private static final Logger logger = LoggerFactory.getLogger(CommitRequest.class);
 
     public enum ValidationStatus {
-        UNSET, VALID, INVALID;
+        UNSET, VALID, INVALID;  // change INVALID TO UNDECIDED, which is different from UNSET!
     }
 
     /* for any transaction instance this will always change deterministically
@@ -78,12 +81,24 @@ public class CommitRequest implements DataSerializable {
      */
     private int serverId;
 
-    /**
-     * The current version of the transaction that creates this commit request.
-     */
-    private int txVersion;
+//    /**
+//     * The current version of the transaction that creates this commit request.
+//     */
+//    private int txVersion;
 
-    private SimpleReadSet readSet;
+    /**
+     * The current version of the transaction that creates this commit request. Also, the version up to which this request has
+     * already been validated.
+     */
+    private int validTxVersion;
+
+    /**
+     * A set of commit IDs against which this request is still valid. Even if such commit IDs are validated and committed ahead of
+     * this request, they do not affect this request's commit. Basically, it means that the write sets of those commits do not
+     * intersect with the read set of the transaction that created this request.
+     */
+    private Set<UUID> benignCommits;
+
     private SimpleWriteSet writeSet;
 
     /* The following fields are set only by the receiver of the commit request. */
@@ -97,11 +112,12 @@ public class CommitRequest implements DataSerializable {
         // required by Hazelcast's DataSerializable
     }
 
-    public CommitRequest(int serverId, int txVersion, SimpleReadSet readSet, SimpleWriteSet writeSet) {
+    public CommitRequest(int serverId, /*int txVersion,*/int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet) {
         this.id = UUID.randomUUID();
         this.serverId = serverId;
-        this.txVersion = txVersion;
-        this.readSet = readSet;
+//        this.txVersion = txVersion;
+        this.validTxVersion = validTxVersion;
+        this.benignCommits = benignCommits;
         this.writeSet = writeSet;
     }
 
@@ -113,12 +129,16 @@ public class CommitRequest implements DataSerializable {
         return this.serverId;
     }
 
-    public int getTxVersion() {
-        return this.txVersion;
+//    public int getTxVersion() {
+//        return this.txVersion;
+//    }
+
+    public int getValidTxVersion() {
+        return this.validTxVersion;
     }
 
-    public SimpleReadSet getReadSet() {
-        return this.readSet;
+    public Set<UUID> getBenignCommits() {
+        return this.benignCommits;
     }
 
     public SimpleWriteSet getWriteSet() {
@@ -156,31 +176,56 @@ public class CommitRequest implements DataSerializable {
     @Override
     public void writeData(ObjectDataOutput out) throws IOException {
         out.writeInt(this.serverId);
-        out.writeInt(this.txVersion);
-        out.writeLong(this.id.getMostSignificantBits());
-        out.writeLong(this.id.getLeastSignificantBits());
-        this.readSet.writeTo(out);
+//        out.writeInt(this.txVersion);
+        writeUUID(out, this.id);
+
+        out.writeInt(this.validTxVersion);
+
+        out.writeInt(this.benignCommits.size());
+        for (UUID commitId : this.benignCommits) {
+            writeUUID(out, commitId);
+        }
+
         this.writeSet.writeTo(out);
     }
 
     @Override
     public void readData(ObjectDataInput in) throws IOException {
         this.serverId = in.readInt();
-        this.txVersion = in.readInt();
-        this.id = new UUID(in.readLong(), in.readLong());
-        this.readSet = SimpleReadSet.readFrom(in);
+//        this.txVersion = in.readInt();
+        this.id = readUUID(in);
+
+        this.validTxVersion = in.readInt();
+
+        int benignCommitsSize = in.readInt();
+        this.benignCommits = new HashSet<UUID>(benignCommitsSize);
+        for (int i = 0; i < benignCommitsSize; i++) {
+            this.benignCommits.add(readUUID(in));
+        }
+
         this.writeSet = SimpleWriteSet.readFrom(in);
+    }
+
+    private void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
+        out.writeLong(uuid.getMostSignificantBits());
+        out.writeLong(uuid.getLeastSignificantBits());
+    }
+
+    private UUID readUUID(ObjectDataInput in) throws IOException {
+        return new UUID(in.readLong(), in.readLong());
     }
 
     @Override
     public String toString() {
         StringBuilder str = new StringBuilder();
         str.append("id=").append(this.getId());
-        str.append(", txVersion=").append(this.getTxVersion());
+//        str.append(", txVersion=").append(this.getTxVersion());
+        str.append(", validTxVersion=").append(this.getValidTxVersion());
         str.append(", serverId=").append(this.getServerId());
-        str.append(", readset={");
-        str.append(this.readSet.toString());
-        str.append("}, writeset={");
+//        str.append(", readset={");
+//        str.append(this.readSet.toString());
+//        str.append("}");
+        str.append(", writeset={");
         str.append(this.writeSet.toString());
         str.append("}");
         return str.toString();
@@ -193,10 +238,12 @@ public class CommitRequest implements DataSerializable {
      * one request in the queue. This method never throws an exception. It catches all and always returns the next request to
      * process.
      * 
+     * @param helper The {@link LockFreeTransaction} that is helping this request.
+     * 
      * @return The next request to process, or <code>null</code> if there are no more records in line.
      */
     @SuppressWarnings("finally")
-    public CommitRequest handle() {
+    public CommitRequest handle(CommitRequestListener helper) {
         CommitRequest next = null;
         try {
             internalHandle();
@@ -210,6 +257,10 @@ public class CommitRequest implements DataSerializable {
                 e.printStackTrace();
             }
         } finally {
+            if (getValidationStatus() == ValidationStatus.INVALID) {
+                helper.notifyUndecided(this);
+            }
+
             next = advanceToNext();
             return next;
         }

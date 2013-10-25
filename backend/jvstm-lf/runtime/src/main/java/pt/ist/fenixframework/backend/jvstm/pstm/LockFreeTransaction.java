@@ -10,6 +10,7 @@ package pt.ist.fenixframework.backend.jvstm.pstm;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import jvstm.ActiveTransactionsRecord;
@@ -26,11 +27,11 @@ import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.ValidationStatus;
 import pt.ist.fenixframework.backend.jvstm.lf.JvstmLockFreeBackEnd;
 import pt.ist.fenixframework.backend.jvstm.lf.LockFreeClusterUtils;
-import pt.ist.fenixframework.backend.jvstm.lf.SimpleReadSet;
 import pt.ist.fenixframework.backend.jvstm.lf.SimpleWriteSet;
 import pt.ist.fenixframework.core.WriteOnReadError;
 
-public class LockFreeTransaction extends ConsistentTopLevelTransaction implements StatisticsCapableTransaction {
+public class LockFreeTransaction extends ConsistentTopLevelTransaction implements StatisticsCapableTransaction,
+        CommitRequestListener {
 
     private static final Logger logger = LoggerFactory.getLogger(LockFreeTransaction.class);
 
@@ -38,6 +39,11 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     private static int NUM_WRITES_THRESHOLD = 100000;
 
     private boolean readOnly = false;
+
+    /**
+     * Commit requests that may be committed ahead of this transaction, and that do not invalidate it.
+     */
+    protected final Set<CommitRequest> benignCommitRequests = new HashSet<>();
 
     // for statistics
     protected int numBoxReads = 0;
@@ -48,11 +54,18 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
         logger.debug("Initial read version is {}", record.transactionNumber);
 
-        upgradeWithPendingCommits();
+        upgradeWithPendingCommitsAtBeginning();
     }
 
-    protected void upgradeWithPendingCommits() {
-        ActiveTransactionsRecord newRecord = processCommitRequests();
+    protected void upgradeWithPendingCommitsAtBeginning() {
+        processCommitRequests(new CommitRequestListener() {
+            @Override
+            public void notifyUndecided(CommitRequest commitRequest) {
+                // ignore these notifications when beginning a transaction
+            }
+        });
+
+        ActiveTransactionsRecord newRecord = Transaction.mostRecentCommittedRecord;
         logger.debug("Done processing pending commit requests.  Most recent version is {}", newRecord.transactionNumber);
 
         if (newRecord != this.activeTxRecord) {
@@ -140,7 +153,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //        if (!this.boxesWritten.isEmpty() || !this.boxesWrittenInPlace.isEmpty()) {
 //            return super.newerVersionDetected(body);
 //        } else {
-            return body.getBody(number);
+        return body.getBody(number);
 //        }
     }
 
@@ -159,25 +172,32 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     commits as it finds in the queue. This is good for: (1) eventually the queue
     gets processed even if there are only read-only transactions; (2) the
     transactions make an effort to begin in the most up to date state of the
-    world, which improves the chances of a write transaction committing successfully
+    world, which improves the chances of a write transaction committing successfully.
+    This method returns the set of commit requests whose validation could not
+    be decided.
     */
-    private ActiveTransactionsRecord processCommitRequests() {
-        // get a transaction and invoke its commit.
 
+    private void processCommitRequests(CommitRequestListener listenerToUse) {
+        // get a transaction and invoke its commit.
         CommitRequest current = LockFreeClusterUtils.getCommitRequestAtHead();
         while (current != null) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Will handle commit request: {}", current);
             }
 
-            current = current.handle();
+            current = current.handle(listenerToUse);
         }
+    }
 
-        /* return the newest record there is. This is safe, and we don't really
-        need to invoke Transaction.getRecordForNewTransaction(), because the
-        current transaction is already holding another record (the same or an
-        older one) from which we will upgrade to this one */
-        return Transaction.mostRecentCommittedRecord;
+    /**
+     * Callback method used by the CommitRequest to notify a committing transaction that such request has been handled and left
+     * undecided.
+     */
+    @Override
+    public void notifyUndecided(CommitRequest commitRequest) {
+        if (validAgainstWriteSet(commitRequest.getWriteSet())) {
+            this.benignCommitRequests.add(commitRequest);
+        }
     }
 
     @Override
@@ -220,32 +240,76 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             checkConsistencyPredicates();
             alreadyChecked = null; // allow gc of set
 
-            preValidateLocally();
-            logger.debug("Tx is locally valid");
+            ValidationStatus myFinalStatus = null;
+            do {
+                preValidateLocally();
+                logger.debug("Tx is locally valid");
 
-            // persist the write set ahead of sending the commit request
-            CommitRequest myRequest = makeCommitRequest();
-            persistWriteSet(myRequest);
+                // persist the write set ahead of sending the commit request
+                CommitRequest myRequest = makeCommitRequest();
+                persistWriteSet(myRequest);
 
 // From TopLevelTransaction:
 //            validate();
 //            ensureCommitStatus();
 // replaced with:
-            helpedTryCommit(myRequest);
+                CommitRequest myHandledRequest = helpedTryCommit(myRequest);
+                myFinalStatus = myHandledRequest.getValidationStatus();
+                logger.debug("My request status was {}", myFinalStatus);
+            } while (myFinalStatus != ValidationStatus.VALID); // we're fully written back here
 
 // From TopLevelTransaction:
             upgradeTx(getCommitTxRecord());  // commitTxRecord was set by the helper LocalCommitOnlyTransaction 
         }
     }
 
+    // returns the requests that, even though undecided, could be committed ahead of me without invalidating me
     protected void preValidateLocally() {
         // locally validate before continuing
         logger.debug("Validating locally before broadcasting commit request");
 //            ActiveTransactionsRecord lastSeenCommitted = helpCommitAll();
-        ActiveTransactionsRecord lastSeenCommitted = processCommitRequests();
 
+        processCommitRequests(this);
+
+        ActiveTransactionsRecord lastSeenCommitted = Transaction.mostRecentCommittedRecord;
         snapshotValidation(lastSeenCommitted.transactionNumber);
         upgradeTx(lastSeenCommitted);
+
+    }
+
+    // Compute whether this tx is valid against a given write set
+    private boolean validAgainstWriteSet(SimpleWriteSet writeSet) {
+        for (String vboxId : writeSet.getVboxIds()) {
+            if (readSetContains(vboxId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Compute whether this tx's read set contains the given vboxId
+    private boolean readSetContains(String vboxId) {
+        if (!this.bodiesRead.isEmpty()) {
+            // the first may not be full
+            jvstm.VBox[] array = this.bodiesRead.first();
+            for (int i = next + 1; i < array.length; i++) {
+                String id = ((VBox) array[i]).getId();
+                if (id.equals(vboxId)) {
+                    return true;
+                }
+            }
+
+            // the rest are full
+            for (jvstm.VBox[] ar : bodiesRead.rest()) {
+                for (jvstm.VBox element : ar) {
+                    String id = ((VBox) element).getId();
+                    if (id.equals(vboxId)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static void persistWriteSet(CommitRequest commitRequest) {
@@ -253,7 +317,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 .persistWriteSet(commitRequest.getId(), commitRequest.getWriteSet(), NULL_VALUE);
     }
 
-    protected void helpedTryCommit(CommitRequest myRequest) throws CommitException {
+    protected CommitRequest helpedTryCommit(CommitRequest myRequest) throws CommitException {
 
         // start by reading the current commit queue's head.  This is to ensure that we don't miss our own commit request
         CommitRequest currentRequest = LockFreeClusterUtils.getCommitRequestAtHead();
@@ -261,7 +325,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         UUID myRequestId = broadcastCommitRequest(myRequest);
 
         // the myRequest instance is different, because it was serialized and deserialized. So, just use its ID.
-        tryCommit(currentRequest, myRequestId);
+        return tryCommit(currentRequest, myRequestId);
     }
 
     private UUID broadcastCommitRequest(CommitRequest commitRequest) {
@@ -273,31 +337,37 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     }
 
     private CommitRequest makeCommitRequest() {
-        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), makeSimpleReadSet(), makeSimpleWriteSet());
-    }
+        Set<UUID> benignRequestIds = new HashSet<>();
 
-    private SimpleReadSet makeSimpleReadSet() {
-        HashSet<String> vboxIds = new HashSet<String>();
-
-        if (!this.bodiesRead.isEmpty()) {
-            // the first may not be full
-            jvstm.VBox[] array = this.bodiesRead.first();
-            for (int i = next + 1; i < array.length; i++) {
-                String vboxId = ((VBox) array[i]).getId();
-                vboxIds.add(vboxId);
-            }
-
-            // the rest are full
-            for (jvstm.VBox[] ar : bodiesRead.rest()) {
-                for (jvstm.VBox element : ar) {
-                    String vboxId = ((VBox) element).getId();
-                    vboxIds.add(vboxId);
-                }
-            }
+        for (CommitRequest commitRequest : this.benignCommitRequests) {
+            benignRequestIds.add(commitRequest.getId());
         }
 
-        return new SimpleReadSet(vboxIds.toArray(new String[vboxIds.size()]));
+        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), benignRequestIds, makeSimpleWriteSet());
     }
+
+//    private SimpleReadSet makeSimpleReadSet() {
+//        HashSet<String> vboxIds = new HashSet<String>();
+//
+//        if (!this.bodiesRead.isEmpty()) {
+//            // the first may not be full
+//            jvstm.VBox[] array = this.bodiesRead.first();
+//            for (int i = next + 1; i < array.length; i++) {
+//                String vboxId = ((VBox) array[i]).getId();
+//                vboxIds.add(vboxId);
+//            }
+//
+//            // the rest are full
+//            for (jvstm.VBox[] ar : bodiesRead.rest()) {
+//                for (jvstm.VBox element : ar) {
+//                    String vboxId = ((VBox) element).getId();
+//                    vboxIds.add(vboxId);
+//                }
+//            }
+//        }
+//
+//        return new SimpleReadSet(vboxIds.toArray(new String[vboxIds.size()]));
+//    }
 
     private SimpleWriteSet makeSimpleWriteSet() {
         // code adapted from jvstm.WriteSet. It's a bit redundant, and cumbersome to maintain if the original code happens to change :-/  This should be refactored
@@ -350,18 +420,21 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 logger.debug("Will handle commit request: {}", current);
             }
 
-            CommitRequest next = current.handle();
+            CommitRequest next = current.handle(this);
             if (current.getId().equals(myRequestId)) {
                 logger.debug("Processed up to commit request: {}. ValidationStatus: {}", myRequestId.toString(),
                         current.getValidationStatus());
 
-                boolean valid = current.getValidationStatus() == ValidationStatus.VALID;
-                if (!valid) {
-                    TransactionSignaller.SIGNALLER.signalCommitFail();
-                    throw new AssertionError("Impossible condition - Commit fail signalled!");
-                }
+//                boolean valid = current.getValidationStatus() == ValidationStatus.VALID;
+//                if (!valid) {
+////                    TransactionSignaller.SIGNALLER.signalCommitFail();
+////                    throw new AssertionError("Impossible condition - Commit fail signalled!");
+//
+//                    /* My validation was undecided. Now I must check whether I'm goo*/
+//
+//                }
 
-                // we know that a valid commit request was written back. we're done
+                // we're done, regardless of whether we're fully committed
                 return current;
             }
 

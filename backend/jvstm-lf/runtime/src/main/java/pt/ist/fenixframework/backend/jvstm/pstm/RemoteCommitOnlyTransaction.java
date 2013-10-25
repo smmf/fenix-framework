@@ -21,7 +21,7 @@ public class RemoteCommitOnlyTransaction extends CommitOnlyTransaction {
     private final WriteSet writeSet = RemoteWriteSet.EMPTY;
 
     public RemoteCommitOnlyTransaction(CommitRequest commitRequest) {
-        super(TransactionUtils.getRecordForRemoteTransaction(commitRequest.getTxVersion()), commitRequest);
+        super(TransactionUtils.getRecordForRemoteTransaction(commitRequest.getValidTxVersion()), commitRequest);
     }
 
     @Override
