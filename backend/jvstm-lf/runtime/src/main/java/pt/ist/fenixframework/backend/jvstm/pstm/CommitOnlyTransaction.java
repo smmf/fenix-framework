@@ -175,24 +175,33 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
             ActiveTransactionsRecord existingRec = lookupTxRecord(this.commitRequest.getValidTxVersion());
             ActiveTransactionsRecord nextRec = existingRec.getNext();
 
-            while (nextRec != null) {
-                UUID nextCommitId = UUID.fromString(txVersionToCommitIdMap.get(nextRec.transactionNumber));
+            if (this.commitRequest.getIsWriteOnly()) {
+                // always valid. Only need to advance to the most recent record where to put this tx
 
-                if (!this.commitRequest.getBenignCommits().contains(nextCommitId)) {
-                    if (this.commitRequest.getId().equals(nextCommitId)) {
-//                        break; // valid! Already enqueued. Check if need more code here...guess  not
-                        updateOrecVersion();  // this is just to ensure that everything that needs to be done after the enqueue is actually done, by this thread if needed
-                        return;
-                    } else {
-                        logger.debug("Unable to validate commit request {}", this.commitRequest.getId());
-                        this.commitRequest.setInvalid();
-                        TransactionSignaller.SIGNALLER.signalCommitFail();
-                        throw new AssertionError("Impossible condition - Commit fail signalled!");
-                    }
+                while (nextRec != null) {
+                    existingRec = nextRec;
+                    nextRec = nextRec.getNext();
                 }
+            } else {
+                while (nextRec != null) {
+                    UUID nextCommitId = UUID.fromString(txVersionToCommitIdMap.get(nextRec.transactionNumber));
 
-                existingRec = nextRec;
-                nextRec = nextRec.getNext();
+                    if (!this.commitRequest.getBenignCommits().contains(nextCommitId)) {
+                        if (this.commitRequest.getId().equals(nextCommitId)) {
+//                        break; // valid! Already enqueued. Check if need more code here...guess  not
+                            updateOrecVersion();  // this is just to ensure that everything that needs to be done after the enqueue is actually done, by this thread if needed
+                            return;
+                        } else {
+                            logger.debug("Unable to validate commit request {}", this.commitRequest.getId());
+                            this.commitRequest.setInvalid();
+                            TransactionSignaller.SIGNALLER.signalCommitFail();
+                            throw new AssertionError("Impossible condition - Commit fail signalled!");
+                        }
+                    }
+
+                    existingRec = nextRec;
+                    nextRec = nextRec.getNext();
+                }
             }
 
             logger.debug("Commit request {} is VALID", this.commitRequest.getId());

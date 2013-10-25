@@ -343,7 +343,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             benignRequestIds.add(commitRequest.getId());
         }
 
-        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), benignRequestIds, makeSimpleWriteSet());
+        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), benignRequestIds, makeSimpleWriteSet(),
+                this.bodiesRead.isEmpty() && this.arraysRead.isEmpty());
     }
 
 //    private SimpleReadSet makeSimpleReadSet() {
