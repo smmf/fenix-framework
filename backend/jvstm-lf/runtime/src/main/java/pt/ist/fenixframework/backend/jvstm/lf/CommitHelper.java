@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pt.ist.fenixframework.backend.jvstm.pstm.CommitRequestListener;
 import pt.ist.fenixframework.util.FenixFrameworkThread;
 
 /**
@@ -60,7 +61,12 @@ public class CommitHelper extends FenixFrameworkThread {
 
         do {
             lastRequestToHandle = currentRequest;
-            currentRequest = currentRequest.handle();
+            currentRequest = currentRequest.handle(new CommitRequestListener() {
+                @Override
+                public void notifyUndecided(CommitRequest commitRequest) {
+                    // ignore these notifications when just helping out
+                }
+            });
         } while (currentRequest != null);
 
         return lastRequestToHandle;
