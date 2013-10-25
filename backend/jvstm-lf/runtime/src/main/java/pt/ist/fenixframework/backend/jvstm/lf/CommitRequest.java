@@ -101,6 +101,11 @@ public class CommitRequest implements DataSerializable {
 
     private SimpleWriteSet writeSet;
 
+    /**
+     * Whether this was a write-only transaction. These transactions will always be valid to commit
+     */
+    private boolean isWriteOnly;
+
     /* The following fields are set only by the receiver of the commit request. */
 
     // The next commit request to process in the queue.
@@ -112,13 +117,15 @@ public class CommitRequest implements DataSerializable {
         // required by Hazelcast's DataSerializable
     }
 
-    public CommitRequest(int serverId, /*int txVersion,*/int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet) {
+    public CommitRequest(int serverId, /*int txVersion,*/int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet,
+            boolean isWriteOnly) {
         this.id = UUID.randomUUID();
         this.serverId = serverId;
 //        this.txVersion = txVersion;
         this.validTxVersion = validTxVersion;
         this.benignCommits = benignCommits;
         this.writeSet = writeSet;
+        this.isWriteOnly = isWriteOnly;
     }
 
     public UUID getId() {
@@ -143,6 +150,10 @@ public class CommitRequest implements DataSerializable {
 
     public SimpleWriteSet getWriteSet() {
         return this.writeSet;
+    }
+
+    public boolean getIsWriteOnly() {
+        return this.isWriteOnly;
     }
 
     public CommitRequest getNext() {
