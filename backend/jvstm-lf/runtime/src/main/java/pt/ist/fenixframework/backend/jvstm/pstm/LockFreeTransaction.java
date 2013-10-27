@@ -43,7 +43,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     /**
      * Commit requests that may be committed ahead of this transaction, and that do not invalidate it.
      */
-    protected final Set<CommitRequest> benignCommitRequests = new HashSet<>();
+    protected Set<CommitRequest> benignCommitRequests;
 
     // for statistics
     protected int numBoxReads = 0;
@@ -52,6 +52,9 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     public LockFreeTransaction(ActiveTransactionsRecord record) {
         super(record);
 
+        this.benignCommitRequests = new HashSet<>();
+        CommitOnlyTransaction.addToActiveRecordsMap(record);
+
         logger.debug("Initial read version is {}", record.transactionNumber);
 
         upgradeWithPendingCommitsAtBeginning();
@@ -59,6 +62,11 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
     protected void upgradeWithPendingCommitsAtBeginning() {
         processCommitRequests(new CommitRequestListener() {
+            @Override
+            public void notifyValid(CommitRequest commitRequest) {
+                // ignore these notifications when beginning a transaction
+            }
+
             @Override
             public void notifyUndecided(CommitRequest commitRequest) {
                 // ignore these notifications when beginning a transaction
@@ -71,6 +79,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         if (newRecord != this.activeTxRecord) {
             logger.debug("Upgrading read version to {}", newRecord.transactionNumber);
             upgradeTx(newRecord);
+
+            CommitOnlyTransaction.addToActiveRecordsMap(newRecord);
         }
     }
 
@@ -141,7 +151,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
         // notice that body has changed if we went into the previous if 
 
-        logger.debug("Value for vbox {} is: '{}'", ((VBox) vbox).getId(), body.value);
+//        logger.debug("Value for vbox {} is: '{}'", ((VBox) vbox).getId(), body.value);
 
         return super.getValueFromBody(vbox, body);
     }
@@ -189,10 +199,11 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         }
     }
 
-    /**
-     * Callback method used by the CommitRequest to notify a committing transaction that such request has been handled and left
-     * undecided.
-     */
+    @Override
+    public void notifyValid(CommitRequest commitRequest) {
+        this.benignCommitRequests.remove(commitRequest);
+    }
+
     @Override
     public void notifyUndecided(CommitRequest commitRequest) {
         if (validAgainstWriteSet(commitRequest.getWriteSet())) {
@@ -343,6 +354,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             benignRequestIds.add(commitRequest.getId());
         }
 
+//        logger.debug("Will create commit request for transaction. isWriteOnly={}, readSetSize={}", this.bodiesRead.isEmpty()
+//                && this.arraysRead.isEmpty(), this.bodiesRead.size() + this.arraysRead.size());
         return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), benignRequestIds, makeSimpleWriteSet(),
                 this.bodiesRead.isEmpty() && this.arraysRead.isEmpty());
     }

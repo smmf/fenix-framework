@@ -29,6 +29,9 @@ public class RemoteCommitOnlyTransaction extends CommitOnlyTransaction {
         return this;
     }
 
+    // TODO: CHECK WHETHER final WriteSet should be volatile instead!  
+    // TODO: CHECK WHY isn't the following method being called immediately when creating the RemoteCommitOnlyTransaction (by the hzl thread?) 
+
     @Override
     protected WriteSet getWriteSet() {
         WriteSet thisWriteSet = this.writeSet;
