@@ -35,11 +35,11 @@ public class CommitRequest implements DataSerializable {
     private static final Logger logger = LoggerFactory.getLogger(CommitRequest.class);
 
     public enum ValidationStatus {
-        UNSET, VALID, INVALID;  // change INVALID TO UNDECIDED, which is different from UNSET!
+        UNSET, VALID, UNDECIDED;  // change UNDECIDED TO UNDECIDED, which is different from UNSET!
     }
 
     /* for any transaction instance this will always change deterministically
-    from UNSET to either VALID or INVALID, i.e. if concurrent helpers try to
+    from UNSET to either VALID or UNDECIDED, i.e. if concurrent helpers try to
     decide, they will conclude the same and the value will never revert back to
     UNSET. */
 //    private volatile ValidationStatus validationStatus = ValidationStatus.UNSET; // AtomicReference?
@@ -106,6 +106,12 @@ public class CommitRequest implements DataSerializable {
      */
     private boolean isWriteOnly;
 
+    /**
+     * The number of times that this request is sent. This can be used to tune the algorithm in case this request is
+     * starving for some time.
+     */
+    private int sendCount = 1;
+
     /* The following fields are set only by the receiver of the commit request. */
 
     // The next commit request to process in the queue.
@@ -148,12 +154,25 @@ public class CommitRequest implements DataSerializable {
         return this.benignCommits;
     }
 
+    public void setBenignCommits(Set<UUID> benignCommits) {
+        this.benignCommits = benignCommits;
+    }
+
     public SimpleWriteSet getWriteSet() {
         return this.writeSet;
     }
 
     public boolean getIsWriteOnly() {
         return this.isWriteOnly;
+    }
+
+    public int getSendCount() {
+        return this.sendCount;
+    }
+
+    // returns the current send count
+    public int incSendCount() {
+        return ++this.sendCount;
     }
 
     public CommitRequest getNext() {
@@ -204,6 +223,7 @@ public class CommitRequest implements DataSerializable {
 
         this.writeSet.writeTo(out);
         out.writeBoolean(this.isWriteOnly);
+        out.writeInt(this.sendCount);
     }
 
     @Override
@@ -222,6 +242,7 @@ public class CommitRequest implements DataSerializable {
 
         this.writeSet = SimpleWriteSet.readFrom(in);
         this.isWriteOnly = in.readBoolean();
+        this.sendCount = in.readInt();
     }
 
     private void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
@@ -259,13 +280,15 @@ public class CommitRequest implements DataSerializable {
         str.append(this.writeSet.toString());
         str.append("}, isWriteOnly={");
         str.append(this.isWriteOnly);
+        str.append("}, sendCount={");
+        str.append(this.sendCount);
         str.append("}");
         return str.toString();
     }
 
     /**
      * Handles a commit request. This method is responsible for all the operations required to commit this request. In the end,
-     * the request will be marked either as committed or invalid. It may then be removed from the queue of commit requests. It
+     * the request will be marked either as committed or undecided. It may then be removed from the queue of commit requests. It
      * will not be removed from the queue if there is no 'next' request. This is to ensure the invariant: There is always at least
      * one request in the queue. This method never throws an exception. It catches all and always returns the next request to
      * process.
@@ -289,7 +312,7 @@ public class CommitRequest implements DataSerializable {
                 e.printStackTrace();
             }
         } finally {
-            if (getValidationStatus() == ValidationStatus.INVALID) {
+            if (getValidationStatus() == ValidationStatus.UNDECIDED) {
                 helper.notifyUndecided(this);
             }
 
@@ -308,12 +331,13 @@ public class CommitRequest implements DataSerializable {
     }
 
     /**
-     * Mark this commit request as invalid. More than one thread may attempt to set this status. Nevertheless, all threads that
+     * Mark this commit request as undecided. More than one thread may attempt to set this status. Nevertheless, all threads that
      * attempt it will have the same opinion.
      */
-    public void setInvalid() {
-//        this.validationStatus = ValidationStatus.INVALID;
-        ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.INVALID);
+    public void setUndecided() {
+        logger.debug("Setting commit request {} to UNDECIDED", this.id.toString());
+//        this.validationStatus = ValidationStatus.UNDECIDED;
+        ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.UNDECIDED);
         if (previous == ValidationStatus.VALID) {
             String msg = "This is a bug! Validation status must be deterministic!";
             logger.error("msg");
@@ -326,9 +350,10 @@ public class CommitRequest implements DataSerializable {
      * attempt it will have the same opinion.
      */
     public void setValid() {
+        logger.debug("Setting commit request {} to VALID", this.id.toString());
 //        this.validationStatus = ValidationStatus.VALID;
         ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.VALID);
-        if (previous == ValidationStatus.INVALID) {
+        if (previous == ValidationStatus.UNDECIDED) {
             String msg = "This is a bug! Validation status must be deterministic!";
             logger.error("msg");
             System.exit(-1);

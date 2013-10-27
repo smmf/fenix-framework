@@ -16,6 +16,7 @@ import jvstm.TransactionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.LockFreeTransaction;
 
 public class InitTransaction extends LockFreeTransaction {
@@ -88,6 +89,7 @@ public class InitTransaction extends LockFreeTransaction {
 
         // fill in this commit requests validation status, because others may see this as the sentinel
         assignCommitRecord(versionToLookup - 1, makeWriteSet());
+        CommitOnlyTransaction.addToActiveRecordsMap(this.commitTxRecord); // make this record available as starting point for future commits
         requestToProcess.setValid();
 
         // set the most recent record
