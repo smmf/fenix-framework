@@ -43,7 +43,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     /**
      * Commit requests that may be committed ahead of this transaction, and that do not invalidate it.
      */
-    protected Set<CommitRequest> benignCommitRequests;
+    protected Set<UUID> benignCommitRequestIds;
 
     // for statistics
     protected int numBoxReads = 0;
@@ -52,7 +52,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     public LockFreeTransaction(ActiveTransactionsRecord record) {
         super(record);
 
-        this.benignCommitRequests = new HashSet<>();
+        this.benignCommitRequestIds = new HashSet<>();
         CommitOnlyTransaction.addToActiveRecordsMap(record);
 
         logger.debug("Initial read version is {}", record.transactionNumber);
@@ -201,13 +201,13 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
     @Override
     public void notifyValid(CommitRequest commitRequest) {
-        this.benignCommitRequests.remove(commitRequest);
+        this.benignCommitRequestIds.remove(commitRequest.getId());
     }
 
     @Override
     public void notifyUndecided(CommitRequest commitRequest) {
         if (validAgainstWriteSet(commitRequest.getWriteSet())) {
-            this.benignCommitRequests.add(commitRequest);
+            this.benignCommitRequestIds.add(commitRequest.getId());
         }
     }
 
@@ -251,14 +251,24 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             checkConsistencyPredicates();
             alreadyChecked = null; // allow gc of set
 
+            CommitRequest myRequest = null;
             ValidationStatus myFinalStatus = null;
             do {
                 preValidateLocally();
                 logger.debug("Tx is locally valid");
 
-                // persist the write set ahead of sending the commit request
-                CommitRequest myRequest = makeCommitRequest();
-                persistWriteSet(myRequest);
+                if (myRequest == null) { // first try. create the commit request
+                    myRequest = makeCommitRequest();
+                    // persist the write set ahead of sending the commit request
+                    persistWriteSet(myRequest);
+                } else {
+                    updateCommitRequest(myRequest);
+                }
+
+                if (myRequest.getSendCount() > 10) {
+                    logger.warn("Commit request {} is being sent {} times. Size of benign commits is {}", myRequest.getId(),
+                            myRequest.getSendCount(), myRequest.getBenignCommits().size());
+                }
 
 // From TopLevelTransaction:
 //            validate();
@@ -348,16 +358,27 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     }
 
     private CommitRequest makeCommitRequest() {
-        Set<UUID> benignRequestIds = new HashSet<>();
-
-        for (CommitRequest commitRequest : this.benignCommitRequests) {
-            benignRequestIds.add(commitRequest.getId());
-        }
+//        Set<UUID> benignRequestIds = new HashSet<>();
+//
+//        for (CommitRequest commitRequest : this.benignCommitRequestIds) {
+//            benignRequestIds.add(commitRequest.getId());
+//        }
 
 //        logger.debug("Will create commit request for transaction. isWriteOnly={}, readSetSize={}", this.bodiesRead.isEmpty()
 //                && this.arraysRead.isEmpty(), this.bodiesRead.size() + this.arraysRead.size());
-        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), benignRequestIds, makeSimpleWriteSet(),
+        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), this.benignCommitRequestIds, makeSimpleWriteSet(),
                 this.bodiesRead.isEmpty() && this.arraysRead.isEmpty());
+    }
+
+    private void updateCommitRequest(CommitRequest myRequest) {
+//        Set<UUID> benignRequestIds = new HashSet<>();
+//
+//        for (CommitRequest commitRequest : this.benignCommitRequestIds) {
+//            benignRequestIds.add(commitRequest.getId());
+//        }
+
+        myRequest.setBenignCommits(this.benignCommitRequestIds);
+        myRequest.incSendCount();
     }
 
 //    private SimpleReadSet makeSimpleReadSet() {

@@ -201,7 +201,7 @@ public class LockFreeClusterUtils {
     /**
      * Clears the given commit request from the head of the remote commits queue if: (1) there is a next one; AND (2) the head is
      * still the given request. This method should only be invoked when the commit request to remove is already handled (either
-     * committed or marked as invalid).
+     * committed or marked as undecided).
      * 
      * FOR CODE SAFETY, this method cannot skip requests. If needed, it must iterate until if finds the request it wants to
      * return.
