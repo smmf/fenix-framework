@@ -37,12 +37,36 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
 
     public static ConcurrentHashMap<Integer, ActiveTransactionsRecord> activeRecordsMap = new ConcurrentHashMap<>();
 
-    protected final CommitRequest commitRequest;
+    public static void addToActiveRecordsMap(ActiveTransactionsRecord record) {
+        logger.debug("Adding record version {} to activeRecordsMap.", record.transactionNumber);
+        ActiveTransactionsRecord previous = CommitOnlyTransaction.activeRecordsMap.putIfAbsent(record.transactionNumber, record);
+        // sanity check
+        if (previous == null) {
+            logger.debug("Success with the mapping.");
+        } else if (previous != record) {
+            logger.error("There was already another record for this same tx version={}!", record.transactionNumber);
+        } else {
+            logger.debug("There was a previous association for this record.  That's ok.");
+        }
+    }
 
-//    private final WriteSet writeSet = STUB_WRITE_SET;
+    public static ActiveTransactionsRecord lookupActiveTransactionsRecord(int txVersion) {
+        ActiveTransactionsRecord rec = CommitOnlyTransaction.activeRecordsMap.get(txVersion);
+        // sanity check
+        if (rec == null) {
+            logger.error("Impossible! Record with version {} not found in the map", txVersion);
+            System.exit(1);
+        }
+        return rec;
+
+    }
 
     public static final ConcurrentHashMap<Integer, String> txVersionToCommitIdMap =
             new ConcurrentHashMap<Integer, String>(100000);
+
+    protected final CommitRequest commitRequest;
+
+//    private final WriteSet writeSet = STUB_WRITE_SET;
 
 //    private boolean readOnly = false;
 
@@ -153,18 +177,89 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
     did it already.  Moving along...
      */
 
+//    @Override
+//    protected void validate() {
+//        logger.debug("Validating commit request: {}", this.commitRequest.getId());
+//        logger.debug("Validating commit request: {}", this.commitRequest);
+//
+//        ValidationStatus validationStatus = this.commitRequest.getValidationStatus();
+//        boolean alreadyValidated = validationStatus != ValidationStatus.UNSET;
+//
+//        if (alreadyValidated) {
+//            if (validationStatus == ValidationStatus.VALID) {
+//                logger.debug("Commit request {} was found already VALID", this.commitRequest.getId());
+//                updateOrecVersion();  // this is just to ensure that everything that needs to be done after the enqueue is actually done, by this thread if needed
+//                return;
+//            } else {
+//                logger.debug("Commit request {} was found already INVALID", this.commitRequest.getId());
+//                /* Still, we throw exception to ensure that our own flow does not proceed to enqueueing */
+//                TransactionSignaller.SIGNALLER.signalCommitFail();
+//                throw new AssertionError("Impossible condition - Commit fail signalled!");
+//            }
+//        } else {
+//            ActiveTransactionsRecord existingRec = lookupActiveTransactionsRecord(this.commitRequest.getValidTxVersion());
+//            ActiveTransactionsRecord nextRec = existingRec.getNext();
+//
+//            if (this.commitRequest.getIsWriteOnly()) {
+//                // always valid. Only need to advance to the most recent record where to put this tx
+//
+//                while (nextRec != null) {
+//                    existingRec = nextRec;
+//                    nextRec = nextRec.getNext();
+//                }
+//            } else {
+//                while (nextRec != null) {
+//                    UUID nextCommitId = UUID.fromString(txVersionToCommitIdMap.get(nextRec.transactionNumber));
+//
+//                    if (!this.commitRequest.getBenignCommits().contains(nextCommitId)) {
+//                        if (this.commitRequest.getId().equals(nextCommitId)) {
+////                        break; // valid! Already enqueued. Check if need more code here...guess  not
+//                            updateOrecVersion();  // this is just to ensure that everything that needs to be done after the enqueue is actually done, by this thread if needed
+//                            return;
+//                        } else {
+//                            logger.debug("Unable to validate commit request {}", this.commitRequest.getId());
+//                            this.commitRequest.setInvalid();
+//                            TransactionSignaller.SIGNALLER.signalCommitFail();
+//                            throw new AssertionError("Impossible condition - Commit fail signalled!");
+//                        }
+//                    }
+//
+//                    existingRec = nextRec;
+//                    nextRec = nextRec.getNext();
+//                }
+//            }
+//
+//            logger.debug("Commit request {} is VALID", this.commitRequest.getId());
+////            assignCommitRecord(lastSeenCommittedTxNumber + 1, getWriteSet());
+//            assignCommitRecord(existingRec.transactionNumber + 1, getWriteSet());
+//            enqueue(existingRec);
+//            updateOrecVersion();
+//        }
+//    }
+
     @Override
     protected void validate() {
-        logger.debug("Validating commit request: {}", this.commitRequest.getId());
+//        logger.debug("Validating commit request: {}", this.commitRequest.getId());
+        logger.debug("Validating commit request: {}", this.commitRequest);
+
+        // these are used to pinpoint the enqueuing location of my record. (just after an existingRec)
+        ActiveTransactionsRecord existingRec = lookupActiveTransactionsRecord(this.commitRequest.getValidTxVersion());
+        ActiveTransactionsRecord nextRec = existingRec.getNext();
 
         ValidationStatus validationStatus = this.commitRequest.getValidationStatus();
         boolean alreadyValidated = validationStatus != ValidationStatus.UNSET;
 
         if (alreadyValidated) {
             if (validationStatus == ValidationStatus.VALID) {
-                logger.debug("Commit request {} was found already VALID", this.commitRequest.getId());
-                updateOrecVersion();  // this is just to ensure that everything that needs to be done after the enqueue is actually done, by this thread if needed
-                return;
+                logger.debug("Commit request {} was found already VALID.  Will find insertion point.", this.commitRequest.getId());
+
+                // my commit record must be already assigned because we're already validated
+                ActiveTransactionsRecord myCommitRecord = this.getCommitTxRecord();
+                // advance until existingRec is just before the expected insertion point of myCommitRecord (which may already be there)
+                while (existingRec.transactionNumber < myCommitRecord.transactionNumber - 1) {
+                    existingRec = nextRec;
+                    nextRec = nextRec.getNext();
+                }
             } else {
                 logger.debug("Commit request {} was found already INVALID", this.commitRequest.getId());
                 /* Still, we throw exception to ensure that our own flow does not proceed to enqueueing */
@@ -172,60 +267,36 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
                 throw new AssertionError("Impossible condition - Commit fail signalled!");
             }
         } else {
-            ActiveTransactionsRecord existingRec = lookupTxRecord(this.commitRequest.getValidTxVersion());
-            ActiveTransactionsRecord nextRec = existingRec.getNext();
+            while (nextRec != null) {
 
-            if (this.commitRequest.getIsWriteOnly()) {
-                // always valid. Only need to advance to the most recent record where to put this tx
+                UUID nextCommitId = UUID.fromString(txVersionToCommitIdMap.get(nextRec.transactionNumber));
 
-                while (nextRec != null) {
-                    existingRec = nextRec;
-                    nextRec = nextRec.getNext();
+                if (nextCommitId.equals(this.commitRequest.getId())) {  // occurs when meanwhile some helper decided I was valid and inserted me
+                    break;
+                } else if (!this.commitRequest.getIsWriteOnly()                              // only read-write transactions require validation
+                        && !this.commitRequest.getBenignCommits().contains(nextCommitId)) {  // found a non-benign commit record enqueued
+                    logger.debug("Unable to validate commit request {}", this.commitRequest.getId());
+                    this.commitRequest.setInvalid();
+                    TransactionSignaller.SIGNALLER.signalCommitFail();
+                    throw new AssertionError("Impossible condition - Commit fail signalled!");
                 }
-            } else {
-                while (nextRec != null) {
-                    UUID nextCommitId = UUID.fromString(txVersionToCommitIdMap.get(nextRec.transactionNumber));
 
-                    if (!this.commitRequest.getBenignCommits().contains(nextCommitId)) {
-                        if (this.commitRequest.getId().equals(nextCommitId)) {
-//                        break; // valid! Already enqueued. Check if need more code here...guess  not
-                            updateOrecVersion();  // this is just to ensure that everything that needs to be done after the enqueue is actually done, by this thread if needed
-                            return;
-                        } else {
-                            logger.debug("Unable to validate commit request {}", this.commitRequest.getId());
-                            this.commitRequest.setInvalid();
-                            TransactionSignaller.SIGNALLER.signalCommitFail();
-                            throw new AssertionError("Impossible condition - Commit fail signalled!");
-                        }
-                    }
-
-                    existingRec = nextRec;
-                    nextRec = nextRec.getNext();
-                }
+                // move on to the next record
+                existingRec = nextRec;
+                nextRec = nextRec.getNext();
             }
-
             logger.debug("Commit request {} is VALID", this.commitRequest.getId());
-//            assignCommitRecord(lastSeenCommittedTxNumber + 1, getWriteSet());
-            assignCommitRecord(existingRec.transactionNumber + 1, getWriteSet());
-            enqueue(existingRec);
-            updateOrecVersion();
         }
-    }
 
-    private ActiveTransactionsRecord lookupTxRecord(int validTxVersion) {
-        ActiveTransactionsRecord rec = CommitOnlyTransaction.activeRecordsMap.get(validTxVersion);
-        // sanity check
-        if (rec == null) {
-            logger.error("Impossible! No record found in the map");
-            System.exit(1);
-        }
-        return rec;
+        assignCommitRecord(existingRec.transactionNumber + 1, getWriteSet());
+        enqueueAfter(existingRec);
+        updateOrecVersion();
     }
 
     @Override
     protected void snapshotValidation(int lastSeenCommittedTxNumber) {
-        throw new UnsupportedOperationException("THIS SHOULD NO LONGER BE USED!");
-
+        logger.error("THIS SHOULD NO LONGER BE USED!");
+        System.exit(1);
 //        /* Notice that someone may have already enqueued this tx, in which case
 //        I may happen to have seen it already committed! But in that case the
 //        validation status must have been set already! So, the following test is
@@ -372,10 +443,11 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
     @Override
     @Deprecated
     protected void validateCommitAndEnqueue(ActiveTransactionsRecord lastCheck) {
-        throw new UnsupportedOperationException("THIS SHOULD NO LONGER BE USED!");
+        logger.error("THIS SHOULD NO LONGER BE USED!");
+        System.exit(1);
     }
 
-    protected void enqueue(ActiveTransactionsRecord lastCheck) {
+    protected void enqueueAfter(ActiveTransactionsRecord lastCheck) {
         enqueueValidCommit(lastCheck, this.getCommitTxRecord().getWriteSet());
 
 //        updateOrecVersion();  // this is now done after every call to the enqueue(...) method
@@ -394,9 +466,10 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
             entry when looking it up ahead.  AND, it must be done before enqueuing
             the ActiveTxRecord, so that whoever reads the volatile 'next' from
             the previous record is guaranteed to the see this mapping. */
-        txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId().toString());
-        logger.debug("Associating tx version {} to commitId {}.", commitRecord.transactionNumber, this.commitRequest.getId()
-                .toString());
+        String previous =
+                txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId().toString());
+        logger.debug("Associating tx version {} to commitId {} (previous was {}).", commitRecord.transactionNumber,
+                this.commitRequest.getId().toString(), previous);
 
         /* Here we know that our commit is valid.  However, we may have concluded
         such result via some helper AND even have seen already our record enqueued
@@ -406,8 +479,8 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
                     commitRecord.transactionNumber, this.commitRequest.getId());
         } else {
             if (lastCheck.trySetNext(commitRecord)) {
-                logger.debug("Enqueued record for valid transaction {} of commit request {}", commitRecord.transactionNumber,
-                        this.commitRequest.getId());
+                logger.debug("Enqueued record for valid transaction {} of commit request {} (ahead of version {})",
+                        commitRecord.transactionNumber, this.commitRequest.getId(), lastCheck);
             } else {
                 logger.debug("Transaction {} of commit request {} was already enqueued by another helper.",
                         commitRecord.transactionNumber, this.commitRequest.getId());
@@ -421,10 +494,14 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
     public void setCommitTxRecord(ActiveTransactionsRecord record) {
         if (UNSAFE.compareAndSwapObject(this.getUnderlyingTransaction(), this.commitTxRecordOffset, null, record)) {
             logger.debug("set commitTxRecord with version {}", record.transactionNumber);
+            CommitOnlyTransaction.addToActiveRecordsMap(record);
         } else {
-            logger.debug("commitTxRecord was already set with version {}", this.getCommitTxRecord().transactionNumber);
+            ActiveTransactionsRecord existingRecord = this.getCommitTxRecord();
+            logger.debug("commitTxRecord was already set with version {}", existingRecord.transactionNumber);
+            // when the CAS fails, another thread may have been preempted just before doing the following line. So we need to ensure its done!
+            CommitOnlyTransaction.addToActiveRecordsMap(existingRecord);
         }
-        CommitOnlyTransaction.activeRecordsMap.putIfAbsent(record.transactionNumber, record);
+
     }
 
 //    @Override

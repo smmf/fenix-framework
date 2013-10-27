@@ -203,6 +203,9 @@ public class LockFreeClusterUtils {
      * still the given request. This method should only be invoked when the commit request to remove is already handled (either
      * committed or marked as invalid).
      * 
+     * FOR CODE SAFETY, this method cannot skip requests. If needed, it must iterate until if finds the request it wants to
+     * return.
+     * 
      * @param commitRequest The commitRequest to remove from head
      * @return The commit request left at the head. This can be either: (1) The commit request given as argument (if it could not
      *         be removed); (2) the commit request following the one given in the argument; or (3) any other commit request (if
@@ -218,11 +221,12 @@ public class LockFreeClusterUtils {
 
         if (commitRequestsHead.compareAndSet(commitRequest, next)) {
             logger.debug("Removed commit request {} from the head.", commitRequest.getId());
-            return next;
+//            return next;
         } else {
             logger.debug("Commit request {} was no longer at the head.", commitRequest.getId());
-            return commitRequestsHead.get();
+//            return commitRequestsHead.get();
         }
+        return next;
 
     }
 

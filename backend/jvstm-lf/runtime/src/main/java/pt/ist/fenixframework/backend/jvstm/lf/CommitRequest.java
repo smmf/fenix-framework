@@ -192,12 +192,18 @@ public class CommitRequest implements DataSerializable {
 
         out.writeInt(this.validTxVersion);
 
-        out.writeInt(this.benignCommits.size());
-        for (UUID commitId : this.benignCommits) {
-            writeUUID(out, commitId);
+        // if it's a write-only, there is no need to send the set of benign commits. Just send an empty one.
+        if (this.isWriteOnly) {
+            out.writeInt(0);
+        } else {
+            out.writeInt(this.benignCommits.size());
+            for (UUID commitId : this.benignCommits) {
+                writeUUID(out, commitId);
+            }
         }
 
         this.writeSet.writeTo(out);
+        out.writeBoolean(this.isWriteOnly);
     }
 
     @Override
@@ -215,6 +221,7 @@ public class CommitRequest implements DataSerializable {
         }
 
         this.writeSet = SimpleWriteSet.readFrom(in);
+        this.isWriteOnly = in.readBoolean();
     }
 
     private void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
@@ -232,12 +239,26 @@ public class CommitRequest implements DataSerializable {
         str.append("id=").append(this.getId());
 //        str.append(", txVersion=").append(this.getTxVersion());
         str.append(", validTxVersion=").append(this.getValidTxVersion());
+        str.append(", benignCommits={");
+        str.append(this.benignCommits.size());
+//        int i = 0;
+//        for (UUID uuid : this.benignCommits) {
+//            if (i != 0) {
+//                str.append(", ");
+//            }
+//            str.append(uuid.toString());
+//            i++;
+//        }
+        str.append("}");
+
         str.append(", serverId=").append(this.getServerId());
 //        str.append(", readset={");
 //        str.append(this.readSet.toString());
 //        str.append("}");
         str.append(", writeset={");
         str.append(this.writeSet.toString());
+        str.append("}, isWriteOnly={");
+        str.append(this.isWriteOnly);
         str.append("}");
         return str.toString();
     }

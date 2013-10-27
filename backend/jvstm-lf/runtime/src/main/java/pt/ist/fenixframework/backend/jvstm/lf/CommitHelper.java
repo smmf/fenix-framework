@@ -63,6 +63,11 @@ public class CommitHelper extends FenixFrameworkThread {
             lastRequestToHandle = currentRequest;
             currentRequest = currentRequest.handle(new CommitRequestListener() {
                 @Override
+                public void notifyValid(CommitRequest commitRequest) {
+                    // ignore these notifications when just helping out
+                }
+
+                @Override
                 public void notifyUndecided(CommitRequest commitRequest) {
                     // ignore these notifications when just helping out
                 }
