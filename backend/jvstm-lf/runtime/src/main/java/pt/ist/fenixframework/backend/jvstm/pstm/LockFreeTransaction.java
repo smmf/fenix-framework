@@ -38,6 +38,15 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     private static int NUM_READS_THRESHOLD = 10000000;
     private static int NUM_WRITES_THRESHOLD = 100000;
 
+    public static void activeSleep(long nanos) {
+        long now = System.nanoTime();
+        long requestedTime = now + nanos;
+
+        while (now < requestedTime) {
+            now = System.nanoTime();
+        }
+    }
+
     private boolean readOnly = false;
 
     /**
@@ -48,6 +57,21 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     // for statistics
     protected int numBoxReads = 0;
     protected int numBoxWrites = 0;
+
+//    /**
+//     * The average number of resents in commit requests seen by this transaction.
+//     */
+//    private final int avgResend = 0;
+
+    /**
+     * The request ID for the commit request of this transaction. Assigned by
+     */
+    protected UUID myRequestId;
+
+    /**
+     * The number of elements considered in the avgResend attribute;
+     */
+    private static final int RESEND_WINDOW = 10;
 
     public LockFreeTransaction(ActiveTransactionsRecord record) {
         super(record);
@@ -69,7 +93,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
             @Override
             public void notifyUndecided(CommitRequest commitRequest) {
-                // ignore these notifications when beginning a transaction
+//                updateAverageResends(commitRequest.getSendCount() - 1);
             }
         });
 
@@ -83,6 +107,12 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             CommitOnlyTransaction.addToActiveRecordsMap(newRecord);
         }
     }
+
+//    protected void updateAverageResends(int resendCount) {
+//        int thisAvg = this.avgResend;
+//        this.avgResend = (this.avgResend * RESEND_WINDOW + resendCount) / (RESEND_WINDOW + 1);
+//        logger.debug("Update avg resends. {} -> {}", thisAvg, this.avgResend);
+//    }
 
     @Override
     public void setReadOnly() {
@@ -187,16 +217,20 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     be decided.
     */
 
-    private void processCommitRequests(CommitRequestListener listenerToUse) {
+    private CommitRequest processCommitRequests(CommitRequestListener listenerToUse) {
         // get a transaction and invoke its commit.
         CommitRequest current = LockFreeClusterUtils.getCommitRequestAtHead();
+        CommitRequest previous = current;  // the head is never null
+
         while (current != null) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Will handle commit request: {}", current);
             }
 
+            previous = current;
             current = current.handle(listenerToUse);
         }
+        return previous;
     }
 
     @Override
@@ -209,6 +243,10 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         if (validAgainstWriteSet(commitRequest.getWriteSet())) {
             this.benignCommitRequestIds.add(commitRequest.getId());
         }
+
+//        if (!commitRequest.equals(this.myRequestId)) {
+//            updateAverageResends(commitRequest.getSendCount() - 1);
+//        }
     }
 
     @Override
@@ -254,18 +292,38 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             CommitRequest myRequest = null;
             ValidationStatus myFinalStatus = null;
             do {
-                preValidateLocally();
+
+                CommitRequest lastProcessedRequest = preValidateLocally();
                 logger.debug("Tx is locally valid");
 
+                if (myRequest == null && CommitRequest.contentionExists()) {
+                    long myWait = CommitRequest.getContention() * 1000L;
+//                    if (System.currentTimeMillis() % 100 == 0) {
+                    logger.debug("CONTENTION is {}. Waiting for {}ns", CommitRequest.getContention(), myWait);
+//                    }
+                    LockFreeTransaction.activeSleep(myWait);
+
+                    lastProcessedRequest = preValidateLocally();
+                    logger.debug("Tx is still locally valid");
+                }
+
+//                logger.warn("At this point contention={}", CommitRequest.getContention());
+
                 if (myRequest == null) { // first try. create the commit request
+//                    logger.warn("First commit attempt");
                     myRequest = makeCommitRequest();
+
+                    // the myRequest instance will be different, because it is serialized and deserialized. So, just use its ID to identify it.
+                    this.myRequestId = myRequest.getId();
+
                     // persist the write set ahead of sending the commit request
                     persistWriteSet(myRequest);
                 } else {
                     updateCommitRequest(myRequest);
+//                    logger.warn("Commit attempts for this tx={}", myRequest.getSendCount());
                 }
 
-                if (myRequest.getSendCount() > 10) {
+                if (myRequest.getSendCount() > 70) {
                     logger.warn("Commit request {} is being sent {} times. Size of benign commits is {}", myRequest.getId(),
                             myRequest.getSendCount(), myRequest.getBenignCommits().size());
                 }
@@ -274,7 +332,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //            validate();
 //            ensureCommitStatus();
 // replaced with:
-                CommitRequest myHandledRequest = helpedTryCommit(myRequest);
+                CommitRequest myHandledRequest = helpedTryCommit(lastProcessedRequest, myRequest);
                 myFinalStatus = myHandledRequest.getValidationStatus();
                 logger.debug("My request status was {}", myFinalStatus);
             } while (myFinalStatus != ValidationStatus.VALID); // we're fully written back here
@@ -285,17 +343,18 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     }
 
     // returns the requests that, even though undecided, could be committed ahead of me without invalidating me
-    protected void preValidateLocally() {
+    protected CommitRequest preValidateLocally() {
         // locally validate before continuing
         logger.debug("Validating locally before broadcasting commit request");
 //            ActiveTransactionsRecord lastSeenCommitted = helpCommitAll();
 
-        processCommitRequests(this);
+        CommitRequest lastProcessedRequest = processCommitRequests(this);
 
         ActiveTransactionsRecord lastSeenCommitted = Transaction.mostRecentCommittedRecord;
         snapshotValidation(lastSeenCommitted.transactionNumber);
         upgradeTx(lastSeenCommitted);
 
+        return lastProcessedRequest;
     }
 
     // Compute whether this tx is valid against a given write set
@@ -338,15 +397,14 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 .persistWriteSet(commitRequest.getId(), commitRequest.getWriteSet(), NULL_VALUE);
     }
 
-    protected CommitRequest helpedTryCommit(CommitRequest myRequest) throws CommitException {
+    protected CommitRequest helpedTryCommit(CommitRequest lastProcessedRequest, CommitRequest myRequest) throws CommitException {
 
-        // start by reading the current commit queue's head.  This is to ensure that we don't miss our own commit request
-        CommitRequest currentRequest = LockFreeClusterUtils.getCommitRequestAtHead();
+//        // start by reading the current commit queue's head.  This is to ensure that we don't miss our own commit request
+//        CommitRequest currentRequest = LockFreeClusterUtils.getCommitRequestAtHead();
 
-        UUID myRequestId = broadcastCommitRequest(myRequest);
+        broadcastCommitRequest(myRequest);
 
-        // the myRequest instance is different, because it was serialized and deserialized. So, just use its ID.
-        return tryCommit(currentRequest, myRequestId);
+        return tryCommit(lastProcessedRequest);
     }
 
     private UUID broadcastCommitRequest(CommitRequest commitRequest) {
@@ -379,6 +437,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
         myRequest.setBenignCommits(this.benignCommitRequestIds);
         myRequest.incSendCount();
+        myRequest.setValidTxVersion(getNumber());
     }
 
 //    private SimpleReadSet makeSimpleReadSet() {
@@ -440,15 +499,15 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     /**
      * Try to commit everything up to (and including) myRequestId.
      * 
-     * @param requestToProcess Head of the remote commits queue
-     * @param myRequestId My commit request's ID
+     * @param lastProcessedRequest Head of the remote commits queue
      * @return The {@link CommitRequest} that corresponds to myRequestId
      * @throws CommitException if the validation of my request failed
      */
-    protected CommitRequest tryCommit(CommitRequest requestToProcess, UUID myRequestId) throws CommitException {
+    protected CommitRequest tryCommit(CommitRequest lastProcessedRequest) throws CommitException {
         // get a transaction and invoke its commit.
 
-        CommitRequest current = requestToProcess;
+//        CommitRequest current = lastProcessedRequest;
+        CommitRequest current = waitForNextRequest(lastProcessedRequest);
 
         while (true) {
             if (logger.isDebugEnabled()) {
@@ -456,8 +515,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             }
 
             CommitRequest next = current.handle(this);
-            if (current.getId().equals(myRequestId)) {
-                logger.debug("Processed up to commit request: {}. ValidationStatus: {}", myRequestId.toString(),
+            if (current.getId().equals(this.myRequestId)) {
+                logger.debug("Processed up to commit request: {}. ValidationStatus: {}", this.myRequestId.toString(),
                         current.getValidationStatus());
 
 //                boolean valid = current.getValidationStatus() == ValidationStatus.VALID;
@@ -485,6 +544,14 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 current = next;
             }
         }
+    }
+
+    private static CommitRequest waitForNextRequest(CommitRequest lastProcessedRequest) {
+        CommitRequest next = null;
+        while ((next = lastProcessedRequest.getNext()) == null) {
+            Thread.yield();
+        }
+        return next;
     }
 
     /* When this tx is performing local validation before sending its commit

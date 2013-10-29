@@ -34,6 +34,48 @@ public class CommitRequest implements DataSerializable {
 
     private static final Logger logger = LoggerFactory.getLogger(CommitRequest.class);
 
+    public static int contention = 0;
+
+    private static void increaseContention() {
+        contention++;
+    }
+
+    private static void decreaseContention() {
+        int local = contention - 1;
+        contention = (local < 0 ? 0 : local);
+    }
+
+    public static boolean contentionExists() {
+        return contention > 10;
+    }
+
+    public static int getContention() {
+        return contention;
+    }
+
+//    public static AtomicInteger contention = new AtomicInteger(0);
+//
+//    private static void increaseContention() {
+//        int value = contention.incrementAndGet();
+////        logger.warn("Contention ++ {}", value);
+//    }
+//
+//    private static void decreaseContention() {
+//        int local = contention.decrementAndGet();
+//        if (local < 0) {
+//            contention.set(0);
+//        }
+////        logger.warn("Contention -- {}", local);
+//    }
+//
+//    public static boolean contentionExists() {
+//        return contention.get() > 10;
+//    }
+//
+//    public static int getContention() {
+//        return contention.get();
+//    }
+
     public enum ValidationStatus {
         UNSET, VALID, UNDECIDED;  // change UNDECIDED TO UNDECIDED, which is different from UNSET!
     }
@@ -148,6 +190,10 @@ public class CommitRequest implements DataSerializable {
 
     public int getValidTxVersion() {
         return this.validTxVersion;
+    }
+
+    public void setValidTxVersion(int validTxVersion) {
+        this.validTxVersion = validTxVersion;
     }
 
     public Set<UUID> getBenignCommits() {
@@ -313,7 +359,14 @@ public class CommitRequest implements DataSerializable {
             }
         } finally {
             if (getValidationStatus() == ValidationStatus.UNDECIDED) {
+                increaseContention();
                 helper.notifyUndecided(this);
+            } else if (getValidationStatus() == ValidationStatus.VALID) {
+                decreaseContention();
+//                helper.notifyValid(this);
+            } else {
+                logger.error("Validation cannot be unset at this point!");
+                System.exit(1);
             }
 
             next = advanceToNext();
