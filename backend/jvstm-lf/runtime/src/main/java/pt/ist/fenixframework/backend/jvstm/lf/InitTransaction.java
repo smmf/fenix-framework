@@ -7,8 +7,6 @@
  */
 package pt.ist.fenixframework.backend.jvstm.lf;
 
-import java.util.UUID;
-
 import jvstm.ActiveTransactionsRecord;
 import jvstm.CommitException;
 import jvstm.TransactionUtils;
@@ -39,25 +37,27 @@ public class InitTransaction extends LockFreeTransaction {
     }
 
     @Override
-    protected void preValidateLocally() {
+    protected CommitRequest preValidateLocally() {
         // no-op
-        /* this requires helping and we can't do it while initializing */
+        /* this requires helping and we can't do it while initializing. Just return the commit request at the front. */
+
+        return LockFreeClusterUtils.getCommitRequestAtHead();
     }
 
     @Override
-    protected CommitRequest helpedTryCommit(CommitRequest myRequest) throws CommitException {
+    protected CommitRequest helpedTryCommit(CommitRequest lastProcessedRequest, CommitRequest myRequest) throws CommitException {
         this.existingVersion = JvstmLockFreeBackEnd.getInstance().getRepository().getMaxCommittedTxNumber();
 
-        return super.helpedTryCommit(myRequest);
+        return super.helpedTryCommit(lastProcessedRequest, myRequest);
     }
 
     @Override
-    protected CommitRequest tryCommit(CommitRequest requestToProcess, UUID myRequestId) throws CommitException {
+    protected CommitRequest tryCommit(CommitRequest lastProcessedRequest) throws CommitException {
         // discard all commit request up to mine
-        while (!requestToProcess.getId().equals(myRequestId)) {
-            logger.debug("Ignoring commit request: {}", requestToProcess.getId());
+        while (!lastProcessedRequest.getId().equals(this.myRequestId)) {
+            logger.debug("Ignoring commit request: {}", lastProcessedRequest.getId());
 
-            requestToProcess = LockFreeClusterUtils.tryToRemoveCommitRequest(requestToProcess);
+            lastProcessedRequest = LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
         }
 
         /* wait until I see my request committed. It will necessarily have a
@@ -65,7 +65,7 @@ public class InitTransaction extends LockFreeTransaction {
         need to look to numbers lower than that */
 
         int versionToLookup = this.existingVersion + 1;
-        String myRequestIdString = myRequestId.toString();
+        String myRequestIdString = this.myRequestId.toString();
         String commitId;
         do {
             commitId = JvstmLockFreeBackEnd.getInstance().getRepository().getCommitIdFromVersion(versionToLookup);
@@ -90,15 +90,15 @@ public class InitTransaction extends LockFreeTransaction {
         // fill in this commit requests validation status, because others may see this as the sentinel
         assignCommitRecord(versionToLookup - 1, makeWriteSet());
         CommitOnlyTransaction.addToActiveRecordsMap(this.commitTxRecord); // make this record available as starting point for future commits
-        requestToProcess.setValid();
+        lastProcessedRequest.setValid();
 
         // set the most recent record
         TransactionUtils.initializeTxNumber(versionToLookup - 1);
 
         // we don't need it in the queue anymore (this is optional)
-        LockFreeClusterUtils.tryToRemoveCommitRequest(requestToProcess);
+        LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
 
-        return requestToProcess;
+        return lastProcessedRequest;
     }
 
 }
