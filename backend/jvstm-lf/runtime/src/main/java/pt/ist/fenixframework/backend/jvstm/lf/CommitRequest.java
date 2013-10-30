@@ -34,15 +34,21 @@ public class CommitRequest implements DataSerializable {
 
     private static final Logger logger = LoggerFactory.getLogger(CommitRequest.class);
 
-    public static int contention = 0;
+    public static int contention = 1;
 
-    private static void increaseContention() {
-        contention++;
+    public static int MAX_CONTENTION = 2 << 26;
+
+    public static void increaseContention() {
+//        contention++;
+        int aux = contention << 1;
+        contention = (aux > MAX_CONTENTION ? MAX_CONTENTION : aux);
     }
 
-    private static void decreaseContention() {
-        int local = contention - 1;
-        contention = (local < 0 ? 0 : local);
+    public static void decreaseContention() {
+//        int local = contention - 1;
+//        contention = (local < 0 ? 0 : local);
+        int aux = contention >> 1;
+        contention = (aux == 0 ? 1 : aux);
     }
 
     public static boolean contentionExists() {
@@ -359,11 +365,11 @@ public class CommitRequest implements DataSerializable {
             }
         } finally {
             if (getValidationStatus() == ValidationStatus.UNDECIDED) {
-                increaseContention();
+//                increaseContention();
                 helper.notifyUndecided(this);
             } else if (getValidationStatus() == ValidationStatus.VALID) {
-                decreaseContention();
-//                helper.notifyValid(this);
+//                decreaseContention();
+                helper.notifyValid(this);
             } else {
                 logger.error("Validation cannot be unset at this point!");
                 System.exit(1);

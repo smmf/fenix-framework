@@ -17,7 +17,7 @@ import pt.ist.fenixframework.util.FenixFrameworkThread;
 public class CommitHelper extends FenixFrameworkThread {
 
     private static final Logger logger = LoggerFactory.getLogger(CommitHelper.class);
-    private static final long SLEEP_INTERVAL = 2000;
+    private static final long SLEEP_INTERVAL = 0;
 
     private static final AtomicInteger helperCount = new AtomicInteger(0);
 
@@ -56,25 +56,27 @@ public class CommitHelper extends FenixFrameworkThread {
         }
     }
 
+    private final CommitRequestListener LISTENER = new CommitRequestListener() {
+        @Override
+        public void notifyValid(CommitRequest commitRequest) {
+            CommitRequest.decreaseContention();
+        }
+
+        @Override
+        public void notifyUndecided(CommitRequest commitRequest) {
+            CommitRequest.increaseContention();
+        }
+    };
+
     private CommitRequest processCommitRequests(CommitRequest currentRequest) {
-        CommitRequest lastRequestToHandle;
+        CommitRequest lastRequestProcessed;
 
         do {
-            lastRequestToHandle = currentRequest;
-            currentRequest = currentRequest.handle(new CommitRequestListener() {
-                @Override
-                public void notifyValid(CommitRequest commitRequest) {
-                    // ignore these notifications when just helping out
-                }
-
-                @Override
-                public void notifyUndecided(CommitRequest commitRequest) {
-                    // ignore these notifications when just helping out
-                }
-            });
+            lastRequestProcessed = currentRequest;
+            currentRequest = currentRequest.handle(this.LISTENER);
         } while (currentRequest != null);
 
-        return lastRequestToHandle;
+        return lastRequestProcessed;
     }
 
 }
