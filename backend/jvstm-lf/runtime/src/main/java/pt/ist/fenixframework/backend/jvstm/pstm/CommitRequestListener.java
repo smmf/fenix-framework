@@ -19,4 +19,16 @@ public interface CommitRequestListener {
      */
     public abstract void notifyUndecided(CommitRequest commitRequest);
 
+    public static CommitRequestListener NO_OP = new CommitRequestListener() {
+
+        @Override
+        public void notifyValid(CommitRequest commitRequest) {
+            // empty
+        }
+
+        @Override
+        public void notifyUndecided(CommitRequest commitRequest) {
+            // empty
+        }
+    };
 }

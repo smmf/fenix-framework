@@ -85,17 +85,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     }
 
     protected void upgradeWithPendingCommitsAtBeginning() {
-        processCommitRequests(new CommitRequestListener() {
-            @Override
-            public void notifyValid(CommitRequest commitRequest) {
-                // ignore these notifications when beginning a transaction
-            }
-
-            @Override
-            public void notifyUndecided(CommitRequest commitRequest) {
-//                updateAverageResends(commitRequest.getSendCount() - 1);
-            }
-        });
+        processCommitRequests(CommitRequestListener.NO_OP);
 
         ActiveTransactionsRecord newRecord = Transaction.mostRecentCommittedRecord;
         logger.debug("Done processing pending commit requests.  Most recent version is {}", newRecord.transactionNumber);
@@ -297,9 +287,9 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 logger.debug("Tx is locally valid");
 
                 if (myRequest == null && CommitRequest.contentionExists()) {
-                    long myWait = CommitRequest.getContention() * 1000L;
+                    long myWait = CommitRequest.getContention();
 //                    if (System.currentTimeMillis() % 100 == 0) {
-                    logger.debug("CONTENTION is {}. Waiting for {}ns", CommitRequest.getContention(), myWait);
+//                    logger.warn("CONTENTION is {}. Waiting for {}ns", CommitRequest.getContention(), myWait);
 //                    }
                     LockFreeTransaction.activeSleep(myWait);
 
@@ -323,10 +313,10 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //                    logger.warn("Commit attempts for this tx={}", myRequest.getSendCount());
                 }
 
-                if (myRequest.getSendCount() > 70) {
-                    logger.warn("Commit request {} is being sent {} times. Size of benign commits is {}", myRequest.getId(),
-                            myRequest.getSendCount(), myRequest.getBenignCommits().size());
-                }
+//                if (myRequest.getSendCount() > 5) {
+//                    logger.warn("Commit request {} is being sent {} times. Size of benign commits is {}", myRequest.getId(),
+//                            myRequest.getSendCount(), myRequest.getBenignCommits().size());
+//                }
 
 // From TopLevelTransaction:
 //            validate();
