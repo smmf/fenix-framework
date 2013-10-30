@@ -7,6 +7,8 @@
  */
 package pt.ist.fenixframework.backend.jvstm.lf;
 
+import java.util.Comparator;
+import java.util.PriorityQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -33,6 +35,11 @@ public class LockFreeClusterUtils {
 
     private static HazelcastInstance HAZELCAST_INSTANCE;
 
+    /**
+     * A buffer for the commit requests.
+     */
+    private static CommitRequestsBuffer requestsBuffer;// = new CommitRequestsBuffer();
+
     // commit requests that have not been applied yet
     private static final AtomicReference<CommitRequest> commitRequestsHead = new AtomicReference<CommitRequest>();
     // this avoids iterating from the head every time a commit request arrives.  Is only used by the (single) thread that enqueues requests
@@ -43,6 +50,17 @@ public class LockFreeClusterUtils {
 
 //    private static final ConcurrentLinkedQueue<CommitRequest> COMMIT_REQUESTS = new ConcurrentLinkedQueue<CommitRequest>();
 
+    static class CommitRequestComparator implements Comparator<CommitRequest> {
+        @Override
+        public int compare(CommitRequest cr1, CommitRequest cr2) {
+            if (cr1.getSendCount() == cr2.getSendCount()) {
+                return cr1.getId().compareTo(cr2.getId());
+            } else {
+                return cr2.getSendCount() - cr1.getSendCount();
+            }
+        }
+    }
+
     private LockFreeClusterUtils() {
     }
 
@@ -52,6 +70,8 @@ public class LockFreeClusterUtils {
 
         com.hazelcast.config.Config hzlCfg = thisConfig.getHazelcastConfig();
         HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
+
+        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(thisConfig.getExpectedInitialNodes() * 4);
 
         // register listener for commit requests
         registerListenerForCommitRequests();
@@ -81,40 +101,39 @@ public class LockFreeClusterUtils {
 
             @Override
             public final void onMessage(Message<CommitRequest> message) {
-//                ENQUEUE_LOCK.lock();
-
-//                try {
                 CommitRequest commitRequest = message.getMessageObject();
 
                 logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getId(),
                         commitRequest.getServerId());
 
-                commitRequest.assignTransaction();
-                enqueueCommitRequest(commitRequest);
-//                } finally {
-//                    ENQUEUE_LOCK.unlock();
-//                }
-            }
-
-            private final void enqueueCommitRequest(CommitRequest commitRequest) {
-//                synchronized (LockFreeClusterUtils.FF_COMMIT_TOPIC_NAME) { // TODO REMOVE THIS !!!
-
-                CommitRequest last = commitRequestsTail;
-
-                // according to Hazelcast, onMessage() runs on a single thread, so this CAS should never fail
-                if (!last.setNext(commitRequest)) {
-                    enqueueFailed();
+                // check for SYNC
+                if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
+                    requestsBuffer.release();
+                    return;
+                } else {
+                    commitRequest.assignTransaction();
+                    requestsBuffer.enqueue(commitRequest);
                 }
-                // update last known tail
-                commitRequestsTail = commitRequest;
-//                }
+
+//                enqueueCommitRequest(commitRequest);
             }
 
-            private void enqueueFailed() throws AssertionError {
-                String message = "Impossible condition: failed to enqueue commit request";
-                logger.error(message);
-                throw new AssertionError(message);
-            }
+//            private final void enqueueCommitRequest(CommitRequest commitRequest) {
+//                CommitRequest last = commitRequestsTail;
+//
+//                // according to Hazelcast, onMessage() runs on a single thread, so this CAS should never fail
+//                if (!last.setNext(commitRequest)) {
+//                    enqueueFailed();
+//                }
+//                // update last known tail
+//                commitRequestsTail = commitRequest;
+//            }
+//
+//            private void enqueueFailed() throws AssertionError {
+//                String message = "Impossible condition: failed to enqueue commit request";
+//                logger.error(message);
+//                throw new AssertionError(message);
+//            }
 
         });
     }
@@ -303,57 +322,94 @@ public class LockFreeClusterUtils {
         return barrier.await(Long.MAX_VALUE, TimeUnit.DAYS);
     }
 
-    //////////////// TO DELETE BELOW THIS ///////////////////////
-    //////////////// TO DELETE BELOW THIS ///////////////////////
-    //////////////// TO DELETE BELOW THIS ///////////////////////
-    //////////////// TO DELETE BELOW THIS ///////////////////////
-    //////////////// TO DELETE BELOW THIS ///////////////////////
+    static class CommitRequestsBuffer {
+        /**
+         * A priority queue to buffer commit requests
+         */
+        private final PriorityQueue<CommitRequest> incommingRequests;
+        private int maxBufferSize = 1;
 
-//    public static int globalLock() {
-//        logger.debug("Will get global cluster lock...");
-//
-//        try {
-//            AtomicNumber lockNumber = getHazelcastInstance().getAtomicNumber(FF_GLOBAL_LOCK_NUMBER_NAME);
-//
-////            int ourLockValue = 0 - DomainClassInfo.getServerId();
-//            do {
-//                long currentValue = lockNumber.get();
-//                boolean unlocked = currentValue != FF_GLOBAL_LOCK_LOCKED_VALUE;
-//
-//                if (unlocked && lockNumber.compareAndSet(currentValue, FF_GLOBAL_LOCK_LOCKED_VALUE)) {
-//                    logger.debug("Acquired global cluster lock. ({} -> {})", currentValue, FF_GLOBAL_LOCK_LOCKED_VALUE);
-//
-//                    return (int) currentValue;  // transaction counters fit into an integer
-//                } else {
-//                    logger.debug("Global lock taken. Retrying...");
-//
-//                    globalLockIsNotYetAvailable();
-//                }
-//            } while (true);
-//        } catch (RuntimeException e) {
-//            logger.error("Failed to acquire global lock");
-//            throw new TransactionError(e);
-//        }
-//    }
-//
-//    /* We'll retry later. Several mechanisms can be used here.  Which is the
-//    best? For now we try to help a little by spending time checking if the
-//    COMMIT_REQUESTS queue requires any processing.  Also, this may help other
-//    transactions that are starting to go ahead */
-//    private static void globalLockIsNotYetAvailable() {
-//        // first naive version. just burn cpu
-//        Thread.yield();
-//    }
-//
-//    public static void globalUnlock(int txNum) {
-//        logger.debug("Will release global cluster lock ( -> {})", txNum);
-//        try {
-//            AtomicNumber lockNumber = getHazelcastInstance().getAtomicNumber(FF_GLOBAL_LOCK_NUMBER_NAME);
-//            lockNumber.set(txNum);
-//        } catch (RuntimeException e) {
-//            logger.error("Failed to release global lock");
-//            throw new TransactionError(e);
-//        }
-//    }
+        CommitRequestsBuffer(int initialBufferSize) {
+            this.incommingRequests = new PriorityQueue<>(1, new CommitRequestComparator());
+            this.maxBufferSize = initialBufferSize;
+        }
 
+        void increaseBuffer() {
+            this.maxBufferSize <<= 1;
+        }
+
+        void decreaseBuffer() {
+            if (this.maxBufferSize > 1) {
+                int newSize = this.maxBufferSize >> 1;
+                this.maxBufferSize = (newSize == 0 ? 1 : newSize);
+                checkFull();
+            }
+        }
+
+        void enqueue(CommitRequest commitRequest) {
+            this.incommingRequests.add(commitRequest);
+            checkFull();
+        }
+
+        void checkFull() {
+            if (this.incommingRequests.size() >= this.maxBufferSize) {
+                release();
+            }
+        }
+
+        public void release() {
+            CommitRequest first = this.incommingRequests.peek();
+
+            if (first == null) {
+                return;  // nothing to do
+            }
+
+            CommitRequest current = this.incommingRequests.poll();
+            CommitRequest next;
+
+            while ((next = this.incommingRequests.poll()) != null) {
+                // this should be running on a single thread, so this CAS should never fail
+                if (!current.setNext(next)) {
+                    enqueueFailed();
+                }
+                current = next;
+            }
+
+            addToPublicQueue(first, current);
+        }
+
+        private void enqueueFailed() throws AssertionError {
+            String message = "Impossible condition: failed to enqueue commit request";
+            logger.error(message);
+            throw new AssertionError(message);
+        }
+
+        private void addToPublicQueue(CommitRequest first, CommitRequest last) {
+            if (logger.isDebugEnabled()) {
+                StringBuilder str = new StringBuilder();
+
+                str.append("Adding to public commit requests queue:");
+
+                CommitRequest current = first;
+                do {
+                    str.append(" CR={id=");
+                    str.append(current.getId());
+                    str.append("}, sendCount=");
+                    str.append(current.getSendCount());
+                    str.append("}");
+                } while ((current = current.getNext()) != null);
+                logger.debug(str.toString());
+            }
+
+            CommitRequest currentTail = LockFreeClusterUtils.commitRequestsTail;
+
+            // this should be running on a single thread, so this CAS should never fail
+            if (!currentTail.setNext(first)) {
+                enqueueFailed();
+            }
+
+            // update last known tail
+            LockFreeClusterUtils.commitRequestsTail = last;
+        }
+    }
 }

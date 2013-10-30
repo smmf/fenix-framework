@@ -73,6 +73,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
      */
     private static final int RESEND_WINDOW = 10;
 
+    private static final long SYNC_TIMEOUT = 1000_000_000L;
+
     public LockFreeTransaction(ActiveTransactionsRecord record) {
         super(record);
 
@@ -286,16 +288,16 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 CommitRequest lastProcessedRequest = preValidateLocally();
                 logger.debug("Tx is locally valid");
 
-                if (myRequest == null && CommitRequest.contentionExists()) {
-                    long myWait = CommitRequest.getContention();
-//                    if (System.currentTimeMillis() % 100 == 0) {
-//                    logger.warn("CONTENTION is {}. Waiting for {}ns", CommitRequest.getContention(), myWait);
-//                    }
-                    LockFreeTransaction.activeSleep(myWait);
-
-                    lastProcessedRequest = preValidateLocally();
-                    logger.debug("Tx is still locally valid");
-                }
+//                if (myRequest == null && CommitRequest.contentionExists()) {
+//                    long myWait = CommitRequest.getContention();
+////                    if (System.currentTimeMillis() % 100 == 0) {
+////                    logger.warn("CONTENTION is {}. Waiting for {}ns", CommitRequest.getContention(), myWait);
+////                    }
+//                    LockFreeTransaction.activeSleep(myWait);
+//
+//                    lastProcessedRequest = preValidateLocally();
+//                    logger.debug("Tx is still locally valid");
+//                }
 
 //                logger.warn("At this point contention={}", CommitRequest.getContention());
 
@@ -426,6 +428,11 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         return tryCommit(lastProcessedRequest);
     }
 
+    protected static void broadcastSync() {
+        logger.warn("Need to send a SYNC request to force the release of the requests buffer!!!");
+        LockFreeClusterUtils.sendCommitRequest(CommitRequest.SYNC_REQUEST);
+    }
+
     private UUID broadcastCommitRequest(CommitRequest commitRequest) {
         // for later recovering this transaction
         CommitOnlyTransaction.commitsMap.put(commitRequest.getId(), this);
@@ -528,6 +535,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //        CommitRequest current = lastProcessedRequest;
         CommitRequest current = waitForNextRequest(lastProcessedRequest);
 
+        long startTime = System.nanoTime();
+
         while (true) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Will handle commit request: {}", current);
@@ -558,6 +567,9 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 under the assumption that delivery of our own request to our own
                 node is guaranteed to occur! */
                 logger.debug("Waiting for my own commit request to arrive to the queue.");
+                if (startTime != 0 && checkSyncTimeout(startTime)) {
+                    startTime = 0; // this disables resending a sync.  no need for multiple syncs
+                }
                 continue;
             } else {
                 current = next;
@@ -565,10 +577,26 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         }
     }
 
-    private static CommitRequest waitForNextRequest(CommitRequest lastProcessedRequest) {
+    protected static boolean checkSyncTimeout(long startTime) {
+        if (timeElapsed(startTime, SYNC_TIMEOUT)) {
+            broadcastSync();
+            return true;
+        }
+        return false;
+    }
+
+    protected static boolean timeElapsed(long startTime, long timeout) {
+        return System.nanoTime() > startTime + timeout;
+    }
+
+    protected static CommitRequest waitForNextRequest(CommitRequest lastProcessedRequest) {
         CommitRequest next = null;
+        long startTime = System.nanoTime();
         while ((next = lastProcessedRequest.getNext()) == null) {
             Thread.yield();
+            if (startTime != 0 && checkSyncTimeout(startTime)) {
+                startTime = 0;
+            }
         }
         return next;
     }
