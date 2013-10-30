@@ -8,6 +8,7 @@
 package pt.ist.fenixframework.backend.jvstm.lf;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -94,28 +95,76 @@ public class CommitRequest implements DataSerializable {
     private final AtomicReference<ValidationStatus> validationStatus = new AtomicReference<ValidationStatus>(
             ValidationStatus.UNSET); // AtomicReference?
 
+    public static UUID UUID_RESERVED_SENTINEL = new UUID(0, 0);
+    public static UUID UUID_RESERVED_SYNC = new UUID(0, 1);
+
+    public static final CommitRequest SYNC_REQUEST = new CommitRequest() {
+        private static final long serialVersionUID = 3L;
+
+        {
+            this.id = UUID_RESERVED_SYNC;
+            this.serverId = -1;
+            this.validTxVersion = -1;
+            this.benignCommits = Collections.emptySet();
+            this.writeSet = new SimpleWriteSet(new String[0]);
+            this.isWriteOnly = false;
+        }
+
+        @Override
+        public ValidationStatus getValidationStatus() {
+            return ValidationStatus.VALID;
+        }
+
+        @Override
+        public void internalHandle() {
+            // no-op
+        }
+
+        @Override
+        public String toString() {
+            return "SYNC";
+        }
+
+//        @Override
+//        public void writeData(ObjectDataOutput out) throws IOException {
+//            out.writeInt(this.serverId);
+////            out.writeInt(this.txVersion);
+//            writeUUID(out, this.id);
+//
+//            out.writeInt(this.validTxVersion);
+//
+//            // there is no set of benign commits
+//            out.writeInt(0);
+//            
+//            this.writeSet.writeTo(out);
+//            out.writeBoolean(this.isWriteOnly);
+//            out.writeInt(this.sendCount);
+//        }
+
+    };
+
     public static synchronized CommitRequest makeSentinelRequest() {
         return new CommitRequest() {
             private static final long serialVersionUID = 2L;
 
             {
-                this.id = new UUID(0, 0);
+                this.id = UUID_RESERVED_SENTINEL;
             }
 
             @Override
             public ValidationStatus getValidationStatus() {
                 return ValidationStatus.VALID;
-            };
+            }
 
             @Override
             public void internalHandle() {
                 // no-op
-            };
+            }
 
             @Override
             public String toString() {
                 return "SENTINEL";
-            };
+            }
         };
     }
 
@@ -127,7 +176,7 @@ public class CommitRequest implements DataSerializable {
     /**
      * The serverId from where the request originates.
      */
-    private int serverId;
+    protected int serverId;
 
 //    /**
 //     * The current version of the transaction that creates this commit request.
@@ -138,27 +187,27 @@ public class CommitRequest implements DataSerializable {
      * The current version of the transaction that creates this commit request. Also, the version up to which this request has
      * already been validated.
      */
-    private int validTxVersion;
+    protected int validTxVersion;
 
     /**
      * A set of commit IDs against which this request is still valid. Even if such commit IDs are validated and committed ahead of
      * this request, they do not affect this request's commit. Basically, it means that the write sets of those commits do not
      * intersect with the read set of the transaction that created this request.
      */
-    private Set<UUID> benignCommits;
+    protected Set<UUID> benignCommits;
 
-    private SimpleWriteSet writeSet;
+    protected SimpleWriteSet writeSet;
 
     /**
      * Whether this was a write-only transaction. These transactions will always be valid to commit
      */
-    private boolean isWriteOnly;
+    protected boolean isWriteOnly;
 
     /**
      * The number of times that this request is sent. This can be used to tune the algorithm in case this request is
      * starving for some time.
      */
-    private int sendCount = 1;
+    protected int sendCount = 1;
 
     /* The following fields are set only by the receiver of the commit request. */
 
@@ -297,12 +346,12 @@ public class CommitRequest implements DataSerializable {
         this.sendCount = in.readInt();
     }
 
-    private void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
+    protected void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
         out.writeLong(uuid.getMostSignificantBits());
         out.writeLong(uuid.getLeastSignificantBits());
     }
 
-    private UUID readUUID(ObjectDataInput in) throws IOException {
+    protected UUID readUUID(ObjectDataInput in) throws IOException {
         return new UUID(in.readLong(), in.readLong());
     }
 

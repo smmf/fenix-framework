@@ -54,10 +54,15 @@ public class InitTransaction extends LockFreeTransaction {
     @Override
     protected CommitRequest tryCommit(CommitRequest lastProcessedRequest) throws CommitException {
         // discard all commit request up to mine
+        long startTime = System.nanoTime();
         while (!lastProcessedRequest.getId().equals(this.myRequestId)) {
             logger.debug("Ignoring commit request: {}", lastProcessedRequest.getId());
 
             lastProcessedRequest = LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
+
+            if (startTime != 0 && checkSyncTimeout(startTime)) {
+                startTime = 0;
+            }
         }
 
         /* wait until I see my request committed. It will necessarily have a
