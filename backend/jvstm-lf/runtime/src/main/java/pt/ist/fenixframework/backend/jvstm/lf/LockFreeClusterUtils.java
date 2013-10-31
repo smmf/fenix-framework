@@ -71,7 +71,8 @@ public class LockFreeClusterUtils {
         com.hazelcast.config.Config hzlCfg = thisConfig.getHazelcastConfig();
         HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
 
-        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(thisConfig.getExpectedInitialNodes() * 4);
+//        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(thisConfig.getExpectedInitialNodes() * 4);
+        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(4);
 
         // register listener for commit requests
         registerListenerForCommitRequests();
@@ -112,10 +113,14 @@ public class LockFreeClusterUtils {
                     return;
                 } else {
                     commitRequest.assignTransaction();
+
+//                    if (requestsBuffer.getMaxSize() == 1) { // don't buffer (unless someone is retrying a lot)
+//                        enqueueCommitRequest(commitRequest);
+//                    } else {                                // buffer
                     requestsBuffer.enqueue(commitRequest);
+//                    }
                 }
 
-//                enqueueCommitRequest(commitRequest);
             }
 
 //            private final void enqueueCommitRequest(CommitRequest commitRequest) {
@@ -328,22 +333,46 @@ public class LockFreeClusterUtils {
          */
         private final PriorityQueue<CommitRequest> incommingRequests;
         private int maxBufferSize = 1;
+        private int lastMaxSendCount = 1; // everything is sent at least once
 
         CommitRequestsBuffer(int initialBufferSize) {
             this.incommingRequests = new PriorityQueue<>(1, new CommitRequestComparator());
             this.maxBufferSize = initialBufferSize;
         }
 
-        void increaseBuffer() {
+        void defaultIncreaseBuffer() {
             this.maxBufferSize <<= 1;
         }
 
-        void decreaseBuffer() {
+        void defaultDecreaseBuffer() {
             if (this.maxBufferSize > 1) {
                 int newSize = this.maxBufferSize >> 1;
                 this.maxBufferSize = (newSize == 0 ? 1 : newSize);
                 checkFull();
             }
+        }
+
+        void deltaIncreaseBuffer(int delta) {
+            this.maxBufferSize += delta;
+        }
+
+        void deltaDecreaseBuffer(int delta) {
+            int newSize = this.maxBufferSize - delta;
+            this.maxBufferSize = (newSize < 1 ? 1 : newSize);
+            checkFull();
+        }
+
+        void setMaxSize(int value) {
+            this.maxBufferSize = value;
+            checkFull();
+        }
+
+        int getMaxSize() {
+            return this.maxBufferSize;
+        }
+
+        boolean isEmpty() {
+            return this.incommingRequests.isEmpty();
         }
 
         void enqueue(CommitRequest commitRequest) {
@@ -361,11 +390,16 @@ public class LockFreeClusterUtils {
             CommitRequest first = this.incommingRequests.peek();
 
             if (first == null) {
+                logger.debug("Release on empty buffer. Nothing to do");
                 return;  // nothing to do
             }
 
+            logger.debug("Releasing commit requests buffer with {} requests. Max size={}", this.incommingRequests.size(),
+                    this.maxBufferSize);
+
             CommitRequest current = this.incommingRequests.poll();
             CommitRequest next;
+            int maxSendCount = current.getSendCount();
 
             while ((next = this.incommingRequests.poll()) != null) {
                 // this should be running on a single thread, so this CAS should never fail
@@ -376,6 +410,17 @@ public class LockFreeClusterUtils {
             }
 
             addToPublicQueue(first, current);
+
+            checkMaxSize(maxSendCount);
+        }
+
+        private void checkMaxSize(int maxSendCount) {
+            // when within [ lastMaxSendCount-1 ; lastMaxSendCount ] keep the current buffer size  
+            if ((maxSendCount < this.lastMaxSendCount - 1) || (maxSendCount > this.lastMaxSendCount)) {
+                logger.debug("Adjusting buffer size from {} to {}.", this.lastMaxSendCount, maxSendCount);
+                setMaxSize(maxSendCount);
+                this.lastMaxSendCount = maxSendCount;
+            }
         }
 
         private void enqueueFailed() throws AssertionError {
@@ -394,7 +439,7 @@ public class LockFreeClusterUtils {
                 do {
                     str.append(" CR={id=");
                     str.append(current.getId());
-                    str.append("}, sendCount=");
+                    str.append(", sendCount=");
                     str.append(current.getSendCount());
                     str.append("}");
                 } while ((current = current.getNext()) != null);
