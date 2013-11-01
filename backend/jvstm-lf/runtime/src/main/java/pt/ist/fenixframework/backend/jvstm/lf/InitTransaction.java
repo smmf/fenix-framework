@@ -9,12 +9,10 @@ package pt.ist.fenixframework.backend.jvstm.lf;
 
 import jvstm.ActiveTransactionsRecord;
 import jvstm.CommitException;
-import jvstm.TransactionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.LockFreeTransaction;
 
 public class InitTransaction extends LockFreeTransaction {
@@ -92,16 +90,9 @@ public class InitTransaction extends LockFreeTransaction {
         commit persisted.  When we see that number set in the repository, it's
         already committed, so just set versionToLoad-1 as the first one*/
 
-        // fill in this commit requests validation status, because others may see this as the sentinel
         assignCommitRecord(versionToLookup - 1, makeWriteSet());
-        CommitOnlyTransaction.addToActiveRecordsMap(this.commitTxRecord); // make this record available as starting point for future commits
-        lastProcessedRequest.setValid();
 
-        // set the most recent record
-        TransactionUtils.initializeTxNumber(this.commitTxRecord);
-
-        // we don't need it in the queue anymore (this is optional)
-        LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
+        lastProcessedRequest.handle(NO_OP);
 
         return lastProcessedRequest;
     }

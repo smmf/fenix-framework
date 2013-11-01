@@ -23,17 +23,6 @@ public class TransactionUtils {
         Transaction.setMostRecentCommittedRecord(initialRecord);
     }
 
-    public static void initializeTxNumber(ActiveTransactionsRecord initialRecord) {
-        logger.info("Setting the last committed TX number to {}", initialRecord.transactionNumber);
-
-        boolean success = Transaction.mostRecentCommittedRecord.trySetNext(initialRecord);
-        if (!success) {
-            throw new AssertionError("Impossible condition: Failed to initializeTxNumber.");
-        }
-        initialRecord.setCommitted();
-        Transaction.setMostRecentCommittedRecord(initialRecord);
-    }
-
     /* smf: clearly need to revise this.  hook up with the code that will be
     able to discover the write set of any transaction (up to the oldest in the
     cluster) */
