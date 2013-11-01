@@ -104,7 +104,7 @@ public class LockFreeClusterUtils {
             public final void onMessage(Message<CommitRequest> message) {
                 CommitRequest commitRequest = message.getMessageObject();
 
-                logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getId(),
+                logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getIdWithCount(),
                         commitRequest.getServerId());
 
                 // check for SYNC
@@ -239,15 +239,15 @@ public class LockFreeClusterUtils {
         CommitRequest next = commitRequest.getNext();
 
         if (next == null) {
-            logger.debug("Commit request {} has no next yet.  Must remain at the head", commitRequest.getId());
+            logger.debug("Commit request {} has no next yet.  Must remain at the head", commitRequest.getIdWithCount());
             return commitRequest;
         }
 
         if (commitRequestsHead.compareAndSet(commitRequest, next)) {
-            logger.debug("Removed commit request {} from the head.", commitRequest.getId());
+            logger.debug("Removed commit request {} from the head.", commitRequest.getIdWithCount());
 //            return next;
         } else {
-            logger.debug("Commit request {} was no longer at the head.", commitRequest.getId());
+            logger.debug("Commit request {} was no longer at the head.", commitRequest.getIdWithCount());
 //            return commitRequestsHead.get();
         }
         return next;
@@ -438,7 +438,7 @@ public class LockFreeClusterUtils {
                 CommitRequest current = first;
                 do {
                     str.append(" CR={id=");
-                    str.append(current.getId());
+                    str.append(current.getIdWithCount());
                     str.append(", sendCount=");
                     str.append(current.getSendCount());
                     str.append("}");

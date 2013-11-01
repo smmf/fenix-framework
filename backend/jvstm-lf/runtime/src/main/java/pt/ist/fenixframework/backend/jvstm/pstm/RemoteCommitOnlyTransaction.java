@@ -38,9 +38,9 @@ public class RemoteCommitOnlyTransaction extends CommitOnlyTransaction {
         if (thisWriteSet == RemoteWriteSet.EMPTY) {
             thisWriteSet = makeWriteSet();
             if (UNSAFE.compareAndSwapObject(this, this.writeSetOffset, RemoteWriteSet.EMPTY, thisWriteSet)) {
-                logger.debug("set writeSet for request {}", this.commitRequest.getId());
+                logger.debug("set writeSet for request {}", this.commitRequest.getIdWithCount());
             } else {
-                logger.debug("writeSet was already set for request {}", this.commitRequest.getId());
+                logger.debug("writeSet was already set for request {}", this.commitRequest.getIdWithCount());
                 thisWriteSet = this.writeSet;
             }
         }

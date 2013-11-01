@@ -153,7 +153,7 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
         will necessarily appear after it and be considered UNDECIDED by all nodes
         */
         if (existingRec == null) {
-            logger.debug("Commit request {} is UNDECIDED", this.commitRequest.getId());
+            logger.debug("Commit request {} is UNDECIDED", this.commitRequest.getIdWithCount());
             this.commitRequest.setUndecided();
             /* Still, we throw exception to ensure that our own flow does not proceed to enqueueing */
             TransactionSignaller.SIGNALLER.signalCommitFail();
@@ -347,21 +347,21 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
         String previous =
                 txVersionToCommitIdMap.putIfAbsent(commitRecord.transactionNumber, this.commitRequest.getId().toString());
         logger.debug("Try to associate tx version {} to commitId {} (before was {}).", commitRecord.transactionNumber,
-                this.commitRequest.getId().toString(), previous);
+                this.commitRequest.getIdWithCount(), previous);
 
         /* Here we know that our commit is valid.  However, we may have concluded
         such result via some helper AND even have seen already our record enqueued
         and committed. So we need to check for that to skip enqueuing. */
         if (lastCheck.transactionNumber >= commitRecord.transactionNumber) {
             logger.debug("There is a commit record version {} already in the queue (it better be for commit request {}).",
-                    commitRecord.transactionNumber, this.commitRequest.getId());
+                    commitRecord.transactionNumber, this.commitRequest.getIdWithCount());
         } else {
             if (lastCheck.trySetNext(commitRecord)) {
                 logger.debug("Enqueued record for valid transaction {} of commit request {} (ahead of version {})",
-                        commitRecord.transactionNumber, this.commitRequest.getId(), lastCheck.transactionNumber);
+                        commitRecord.transactionNumber, this.commitRequest.getIdWithCount(), lastCheck.transactionNumber);
             } else {
                 logger.debug("Commit record version {} of commit request {} was concurrently enqueued by some helper.",
-                        commitRecord.transactionNumber, this.commitRequest.getId());
+                        commitRecord.transactionNumber, this.commitRequest.getIdWithCount());
             }
         }
 

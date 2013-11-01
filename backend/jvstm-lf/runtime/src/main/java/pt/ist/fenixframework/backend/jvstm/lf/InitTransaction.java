@@ -54,7 +54,7 @@ public class InitTransaction extends LockFreeTransaction {
         // discard all commit request up to mine
         long startTime = System.nanoTime();
         while (!lastProcessedRequest.getId().equals(this.myRequestId)) {
-            logger.debug("Ignoring commit request: {}", lastProcessedRequest.getId());
+            logger.debug("Ignoring commit request: {}", lastProcessedRequest.getIdWithCount());
 
             lastProcessedRequest = LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
 

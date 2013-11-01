@@ -168,6 +168,8 @@ public class CommitRequest implements DataSerializable {
         };
     }
 
+    private transient String idWithCount;
+
     /**
      * A unique request ID.
      */
@@ -229,6 +231,16 @@ public class CommitRequest implements DataSerializable {
         this.benignCommits = benignCommits;
         this.writeSet = writeSet;
         this.isWriteOnly = isWriteOnly;
+    }
+
+    public String getIdWithCount() {
+        // this is a benign data race
+        String local = this.idWithCount;
+        if (local == null) {
+            local = "<" + getId() + "," + getSendCount() + ">";
+            this.idWithCount = local;
+        }
+        return local;
     }
 
     public UUID getId() {
@@ -296,10 +308,10 @@ public class CommitRequest implements DataSerializable {
     public void assignTransaction() {
         LockFreeTransaction tx = CommitOnlyTransaction.commitsMap.remove(this.id);
         if (tx != null) {
-            logger.debug("Assigning LocalCommitOnlyTransaction to CommitRequest: {}", this.id);
+            logger.debug("Assigning LocalCommitOnlyTransaction to CommitRequest: {}", this.getIdWithCount());
             this.transaction = new LocalCommitOnlyTransaction(this, tx);
         } else {
-            logger.debug("Assigning new RemoteCommitOnlyTransaction to CommitRequest: {}", this.id);
+            logger.debug("Assigning new RemoteCommitOnlyTransaction to CommitRequest: {}", this.getIdWithCount());
             this.transaction = new RemoteCommitOnlyTransaction(this);
         }
     }
@@ -404,12 +416,12 @@ public class CommitRequest implements DataSerializable {
         try {
             internalHandle();
         } catch (CommitException e) {
-            logger.debug("Commit Request {} threw CommitException. Exception will be discarded.", this.getId());
+            logger.debug("Commit Request {} threw CommitException. Exception will be discarded.", this.getIdWithCount());
         } catch (Throwable e) {
             if (logger.isDebugEnabled()) {
                 logger.debug(
                         "Handling localCommit for request {} threw {}.  It will be obfuscated by the return of this method.",
-                        this.getId(), e);
+                        this.getIdWithCount(), e);
                 e.printStackTrace();
             }
         } finally {
@@ -443,7 +455,7 @@ public class CommitRequest implements DataSerializable {
      * attempt it will have the same opinion.
      */
     public void setUndecided() {
-        logger.debug("Setting commit request {} to UNDECIDED", this.id.toString());
+        logger.debug("Setting commit request {} to UNDECIDED", this.getIdWithCount());
 //        this.validationStatus = ValidationStatus.UNDECIDED;
         ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.UNDECIDED);
         if (previous == ValidationStatus.VALID) {
@@ -458,7 +470,7 @@ public class CommitRequest implements DataSerializable {
      * attempt it will have the same opinion.
      */
     public void setValid() {
-        logger.debug("Setting commit request {} to VALID", this.id.toString());
+        logger.debug("Setting commit request {} to VALID", this.getIdWithCount());
 //        this.validationStatus = ValidationStatus.VALID;
         ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.VALID);
         if (previous == ValidationStatus.UNDECIDED) {
