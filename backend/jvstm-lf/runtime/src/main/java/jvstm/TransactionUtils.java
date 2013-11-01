@@ -19,6 +19,7 @@ public class TransactionUtils {
         if (!success) {
             throw new AssertionError("Impossible condition: Failed to initializeTxNumber.");
         }
+        initialRecord.setCommitted();
         Transaction.setMostRecentCommittedRecord(initialRecord);
     }
 
@@ -29,6 +30,7 @@ public class TransactionUtils {
         if (!success) {
             throw new AssertionError("Impossible condition: Failed to initializeTxNumber.");
         }
+        initialRecord.setCommitted();
         Transaction.setMostRecentCommittedRecord(initialRecord);
     }
 
