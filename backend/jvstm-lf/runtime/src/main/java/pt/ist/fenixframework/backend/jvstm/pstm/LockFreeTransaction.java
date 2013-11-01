@@ -335,6 +335,12 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 CommitRequest myHandledRequest = helpedTryCommit(lastProcessedRequest, myRequest);
                 myFinalStatus = myHandledRequest.getValidationStatus();
                 logger.debug("My request status was {}", myFinalStatus);
+
+                if (myFinalStatus == ValidationStatus.VALID) {
+                    logger.debug("Commit: version={{}}, id={{}}, writeset={{}}", getCommitTxRecord().transactionNumber,
+                            this.myRequestId, myHandledRequest.getWriteSet().getVboxIds());
+                }
+
             } while (myFinalStatus != ValidationStatus.VALID); // we're fully written back here
 
 // From TopLevelTransaction:
@@ -351,7 +357,30 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         CommitRequest lastProcessedRequest = processCommitRequests(this);
 
         ActiveTransactionsRecord lastSeenCommitted = Transaction.mostRecentCommittedRecord;
-        snapshotValidation(lastSeenCommitted.transactionNumber);
+        try {
+            snapshotValidation(lastSeenCommitted.transactionNumber);
+        } catch (Exception e) {
+            StringBuilder str = new StringBuilder();
+
+            str.append("Invalid tx in snapshot validation! ReadSet is:");
+
+            // the first may not be full
+            jvstm.VBox[] array = this.bodiesRead.first();
+            for (int i = next + 1; i < array.length; i++) {
+                String id = ((VBox) array[i]).getId();
+                str.append(" {").append(id).append("}");
+            }
+
+            // the rest are full
+            for (jvstm.VBox[] ar : bodiesRead.rest()) {
+                for (jvstm.VBox element : ar) {
+                    String id = ((VBox) element).getId();
+                    str.append(" {").append(id).append("}");
+                }
+
+            }
+            logger.debug(str.toString());
+        }
         upgradeTx(lastSeenCommitted);
 
         return lastProcessedRequest;
