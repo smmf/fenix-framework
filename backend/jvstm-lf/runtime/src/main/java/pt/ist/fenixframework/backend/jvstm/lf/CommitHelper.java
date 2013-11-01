@@ -29,7 +29,7 @@ public class CommitHelper extends FenixFrameworkThread {
     public void run() {
         logger.debug("Commit helper working.");
         CommitRequest lastProcessed = processCommitRequests(LockFreeClusterUtils.getCommitRequestAtHead());
-        logger.debug("Initializing last processed commit request to {}", lastProcessed.getId().toString());
+        logger.debug("Initializing last processed commit request to {}", lastProcessed.getIdWithCount().toString());
 
         while (true) {
             try {
