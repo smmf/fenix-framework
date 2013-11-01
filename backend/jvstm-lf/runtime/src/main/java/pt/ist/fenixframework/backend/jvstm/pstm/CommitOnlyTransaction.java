@@ -397,7 +397,7 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
 
             if (commitId != null) { // may be null if it was already persisted 
                 JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
-                CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
+//                CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
             }
             super.helpCommit(recordToCommit);
         } else {
