@@ -93,7 +93,7 @@ public class InitTransaction extends LockFreeTransaction {
         lastProcessedRequest.setValid();
 
         // set the most recent record
-        TransactionUtils.initializeTxNumber(versionToLookup - 1);
+        TransactionUtils.initializeTxNumber(this.commitTxRecord);
 
         // we don't need it in the queue anymore (this is optional)
         LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
