@@ -77,7 +77,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         super(record);
 
         this.benignCommitRequestIds = new HashSet<>();
-        CommitOnlyTransaction.addToActiveRecordsMap(record);
+//        CommitOnlyTransaction.addToActiveRecordsMap(record);
 
         logger.debug("Initial read version is {}", record.transactionNumber);
 
