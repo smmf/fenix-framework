@@ -219,6 +219,11 @@ public class CommitRequest implements DataSerializable {
      */
     protected boolean reset = false;
 
+    /**
+     * A time stamp set by the sender.
+     */
+    protected long timestamp;
+
     /* The following fields are set only by the receiver of the commit request. */
 
     // The next commit request to process in the queue.
@@ -300,6 +305,14 @@ public class CommitRequest implements DataSerializable {
         return this.reset;
     }
 
+    public long getTimestamp() {
+        return this.timestamp;
+    }
+
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
+    }
+
     public CommitRequest getNext() {
         return this.next.get();
     }
@@ -350,6 +363,7 @@ public class CommitRequest implements DataSerializable {
         out.writeBoolean(this.isWriteOnly);
         out.writeInt(this.sendCount);
         out.writeBoolean(this.reset);
+        out.writeLong(this.timestamp);
     }
 
     @Override
@@ -370,6 +384,7 @@ public class CommitRequest implements DataSerializable {
         this.isWriteOnly = in.readBoolean();
         this.sendCount = in.readInt();
         this.reset = in.readBoolean();
+        this.timestamp = in.readLong();
     }
 
     protected void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
