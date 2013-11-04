@@ -201,6 +201,8 @@ public class LockFreeClusterUtils {
         }
 
         ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
+
+        commitRequest.setTimestamp(System.nanoTime());
         topic.publish(commitRequest);
     }
 
@@ -323,6 +325,7 @@ public class LockFreeClusterUtils {
     }
 
     static class CommitRequestsBuffer {
+        private static final long MAX_WAIT_TIME_NANOS = 100_000L;
         /**
          * Counter for the number of pending UNDECIDED requests. Must be a deterministic value in every node. It is used to
          * determine
@@ -336,6 +339,9 @@ public class LockFreeClusterUtils {
         private final PriorityQueue<CommitRequest> incommingRequests;
         private int maxBufferSize = 1;
 
+        long maxTimestamp = 0L;
+        long minTimestamp = Long.MAX_VALUE;
+
 //        private int lastMaxSendCount = 1; // everything is sent at least once
 
 //        CommitRequestsBuffer(int initialBufferSize) {
@@ -347,6 +353,11 @@ public class LockFreeClusterUtils {
             this.lastRequestAnalyzed = initial;
             this.incommingRequests = new PriorityQueue<>(1, new CommitRequestComparator());
             this.maxBufferSize = 1;
+        }
+
+        private void resetTimestamps() {
+            this.maxTimestamp = 0L;
+            this.minTimestamp = Long.MAX_VALUE;
         }
 
 //        void defaultIncreaseBuffer() {
@@ -386,6 +397,7 @@ public class LockFreeClusterUtils {
         }
 
         void enqueue(CommitRequest commitRequest) {
+            updateTimestamp(commitRequest);
             this.incommingRequests.add(commitRequest);
 
             if (commitRequest.getReset()) {
@@ -395,8 +407,23 @@ public class LockFreeClusterUtils {
             }
         }
 
+        private boolean waitingForTooLong() {
+            return (this.maxTimestamp - this.minTimestamp) >= MAX_WAIT_TIME_NANOS;
+        }
+
+        private void updateTimestamp(CommitRequest commitRequest) {
+            long ts = commitRequest.getTimestamp();
+            if (ts > this.maxTimestamp) {
+                this.maxTimestamp = ts;
+            }
+            if (ts < this.minTimestamp) {
+                this.minTimestamp = ts;
+            }
+        }
+
         private void checkFull() {
-            if ((!this.incommingRequests.isEmpty()) && (this.incommingRequests.size() >= this.maxBufferSize)) {
+            if (((!this.incommingRequests.isEmpty()) && (this.incommingRequests.size() >= this.maxBufferSize))
+                    || waitingForTooLong()) {
                 flushAndUpdateBufferSize();
             }
         }
@@ -471,6 +498,11 @@ public class LockFreeClusterUtils {
                 return;
             }
 
+//            long maxTimestamp = first.getTimestamp();
+//            long minTimestamp = first.getTimestamp();
+
+            int size = this.incommingRequests.size();
+
             logger.debug("Flushing commit requests buffer with {} requests. Max size={}", this.incommingRequests.size(),
                     this.maxBufferSize);
 
@@ -482,8 +514,20 @@ public class LockFreeClusterUtils {
                 if (!current.setNext(next)) {
                     enqueueFailed();
                 }
+
+//                long ts = next.getTimestamp();
+//                if (ts > maxTimestamp) {
+//                    maxTimestamp = ts;
+//                }
+//                if (ts < minTimestamp) {
+//                    minTimestamp = ts;
+//                }
                 current = next;
             }
+
+            logger.debug("Max wait time: {}. bufferSize: {}.  maxSize: {}", this.maxTimestamp - this.minTimestamp, size,
+                    this.maxBufferSize);
+            resetTimestamps();
 
             addToPublicQueue(first, current);
         }
