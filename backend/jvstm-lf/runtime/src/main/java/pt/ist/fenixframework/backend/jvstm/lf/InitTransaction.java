@@ -56,6 +56,13 @@ public class InitTransaction extends LockFreeTransaction {
         while (!lastProcessedRequest.getId().equals(this.myRequestId)) {
             logger.debug("Ignoring commit request: {}", lastProcessedRequest.getIdWithCount());
 
+            /* IMPORTANT: I don't actually know whether these are VALID or
+            UNDECIDED.  I just set them VALID so that they can be ignored by the
+            commit requests listener thread when it waits for their status.
+            Remember that we're just initializing and there are no more threads
+            committing. */
+            lastProcessedRequest.setValid();
+
             lastProcessedRequest = LockFreeClusterUtils.tryToRemoveCommitRequest(lastProcessedRequest);
 
             if (startTime != 0 && checkSyncTimeout(startTime)) {

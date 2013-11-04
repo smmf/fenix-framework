@@ -108,6 +108,7 @@ public class CommitRequest implements DataSerializable {
             this.benignCommits = Collections.emptySet();
             this.writeSet = new SimpleWriteSet(new String[0]);
             this.isWriteOnly = false;
+            this.reset = true;
         }
 
         @Override
@@ -149,6 +150,7 @@ public class CommitRequest implements DataSerializable {
 
             {
                 this.id = UUID_RESERVED_SENTINEL;
+                this.reset = true;
             }
 
             @Override
@@ -210,6 +212,12 @@ public class CommitRequest implements DataSerializable {
      * starving for some time.
      */
     protected int sendCount = 1;
+
+    /**
+     * Whether to reset any computed state back to the beginning. This is used, e.g., whenever a new node joins the cluster so
+     * that any computed state goes back to a well-know value, so that the new node can know how to proceed.
+     */
+    protected boolean reset = false;
 
     /* The following fields are set only by the receiver of the commit request. */
 
@@ -288,6 +296,10 @@ public class CommitRequest implements DataSerializable {
         return ++this.sendCount;
     }
 
+    public boolean getReset() {
+        return this.reset;
+    }
+
     public CommitRequest getNext() {
         return this.next.get();
     }
@@ -337,6 +349,7 @@ public class CommitRequest implements DataSerializable {
         this.writeSet.writeTo(out);
         out.writeBoolean(this.isWriteOnly);
         out.writeInt(this.sendCount);
+        out.writeBoolean(this.reset);
     }
 
     @Override
@@ -356,6 +369,7 @@ public class CommitRequest implements DataSerializable {
         this.writeSet = SimpleWriteSet.readFrom(in);
         this.isWriteOnly = in.readBoolean();
         this.sendCount = in.readInt();
+        this.reset = in.readBoolean();
     }
 
     protected void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
@@ -395,6 +409,8 @@ public class CommitRequest implements DataSerializable {
         str.append(this.isWriteOnly);
         str.append("}, sendCount={");
         str.append(this.sendCount);
+        str.append("}, reset={");
+        str.append(this.reset);
         str.append("}");
         return str.toString();
     }
