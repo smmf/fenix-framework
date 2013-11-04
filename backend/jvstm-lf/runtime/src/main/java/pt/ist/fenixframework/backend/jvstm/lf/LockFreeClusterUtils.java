@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.ValidationStatus;
 import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
 
 import com.hazelcast.core.Hazelcast;
@@ -72,7 +73,7 @@ public class LockFreeClusterUtils {
         HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
 
 //        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(thisConfig.getExpectedInitialNodes() * 4);
-        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(4);
+        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(getCommitRequestAtHead());
 
         // register listener for commit requests
         registerListenerForCommitRequests();
@@ -109,18 +110,12 @@ public class LockFreeClusterUtils {
 
                 // check for SYNC
                 if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
-                    requestsBuffer.release();
-                    return;
+                    logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
+                    requestsBuffer.flushAndResetBufferSize();
                 } else {
                     commitRequest.assignTransaction();
-
-//                    if (requestsBuffer.getMaxSize() == 1) { // don't buffer (unless someone is retrying a lot)
-//                        enqueueCommitRequest(commitRequest);
-//                    } else {                                // buffer
                     requestsBuffer.enqueue(commitRequest);
-//                    }
                 }
-
             }
 
 //            private final void enqueueCommitRequest(CommitRequest commitRequest) {
@@ -329,47 +324,62 @@ public class LockFreeClusterUtils {
 
     static class CommitRequestsBuffer {
         /**
+         * Counter for the number of pending UNDECIDED requests. Must be a deterministic value in every node. It is used to
+         * determine
+         * the buffer size for the incoming requests.
+         */
+        private static int undecided = 0;
+        /**
          * A priority queue to buffer commit requests
          */
+        private CommitRequest lastRequestAnalyzed;
         private final PriorityQueue<CommitRequest> incommingRequests;
         private int maxBufferSize = 1;
-        private int lastMaxSendCount = 1; // everything is sent at least once
 
-        CommitRequestsBuffer(int initialBufferSize) {
+//        private int lastMaxSendCount = 1; // everything is sent at least once
+
+//        CommitRequestsBuffer(int initialBufferSize) {
+//            this.incommingRequests = new PriorityQueue<>(1, new CommitRequestComparator());
+//            this.maxBufferSize = initialBufferSize;
+//        }
+
+        CommitRequestsBuffer(CommitRequest initial) {
+            this.lastRequestAnalyzed = initial;
             this.incommingRequests = new PriorityQueue<>(1, new CommitRequestComparator());
-            this.maxBufferSize = initialBufferSize;
+            this.maxBufferSize = 1;
         }
 
-        void defaultIncreaseBuffer() {
-            this.maxBufferSize <<= 1;
-        }
+//        void defaultIncreaseBuffer() {
+//            this.maxBufferSize <<= 1;
+//        }
 
-        void defaultDecreaseBuffer() {
-            if (this.maxBufferSize > 1) {
-                int newSize = this.maxBufferSize >> 1;
-                this.maxBufferSize = (newSize == 0 ? 1 : newSize);
-                checkFull();
-            }
-        }
+//        void defaultDecreaseBuffer() {
+//            if (this.maxBufferSize > 1) {
+//                int newSize = this.maxBufferSize >> 1;
+//                this.maxBufferSize = (newSize == 0 ? 1 : newSize);
+//                checkFull();
+//            }
+//        }
 
-        void deltaIncreaseBuffer(int delta) {
-            this.maxBufferSize += delta;
-        }
+//        void deltaIncreaseBuffer(int delta) {
+//            this.maxBufferSize += delta;
+//        }
 
-        void deltaDecreaseBuffer(int delta) {
-            int newSize = this.maxBufferSize - delta;
-            this.maxBufferSize = (newSize < 1 ? 1 : newSize);
-            checkFull();
-        }
+//        void deltaDecreaseBuffer(int delta) {
+//            int newSize = this.maxBufferSize - delta;
+//            this.maxBufferSize = (newSize < 1 ? 1 : newSize);
+//            checkFull();
+//        }
 
-        void setMaxSize(int value) {
+        private void setMaxSize(int value) {
+            logger.debug("Adjusting commit requests' buffer size: {}", value);
             this.maxBufferSize = value;
             checkFull();
         }
 
-        int getMaxSize() {
-            return this.maxBufferSize;
-        }
+//        int getMaxSize() {
+//            return this.maxBufferSize;
+//        }
 
         boolean isEmpty() {
             return this.incommingRequests.isEmpty();
@@ -377,30 +387,96 @@ public class LockFreeClusterUtils {
 
         void enqueue(CommitRequest commitRequest) {
             this.incommingRequests.add(commitRequest);
-            checkFull();
-        }
 
-        void checkFull() {
-            if (this.incommingRequests.size() >= this.maxBufferSize) {
-                release();
+            if (commitRequest.getReset()) {
+                flushAndResetBufferSize();
+            } else {
+                checkFull();
             }
         }
 
-        public void release() {
+        private void checkFull() {
+            if ((!this.incommingRequests.isEmpty()) && (this.incommingRequests.size() >= this.maxBufferSize)) {
+                flushAndUpdateBufferSize();
+            }
+        }
+
+        private void updateUndecided(CommitRequest upToThisRequest) {
+            logger.debug("updateUndecided() up to {}.  LastRequestAnalyzed={}",
+                    (upToThisRequest == null ? "NULL" : upToThisRequest.getIdWithCount()),
+                    this.lastRequestAnalyzed.getIdWithCount());
+
+            CommitRequest currentRequest = this.lastRequestAnalyzed.getNext();
+
+            while (currentRequest != upToThisRequest) {
+                logger.debug("currentRequest={}", (currentRequest == null ? "NULL" : currentRequest.getIdWithCount()));
+                ValidationStatus validationStatus = waitForValidationStatus(currentRequest);
+                if (validationStatus == ValidationStatus.UNDECIDED && currentRequest.getSendCount() == 1) { // another undecided record
+                    CommitRequestsBuffer.undecided++;
+                } else if (validationStatus == ValidationStatus.VALID && currentRequest.getSendCount() > 1) { // a previously undecided just got valid
+                    int newValue = CommitRequestsBuffer.undecided - 1;
+                    CommitRequestsBuffer.undecided = (newValue < 0 ? 0 : newValue);
+                }
+                this.lastRequestAnalyzed = currentRequest;
+                currentRequest = currentRequest.getNext();
+            }
+            logger.debug("END updateUndecided(). lastRequestAnalyzed={}", this.lastRequestAnalyzed.getIdWithCount());
+        }
+
+        private ValidationStatus waitForValidationStatus(CommitRequest currentRequest) {
+            ValidationStatus validationStatus;
+            while ((validationStatus = currentRequest.getValidationStatus()) == ValidationStatus.UNSET) {
+                ;
+            }
+            logger.debug("waited for validation of request {} (status={})", currentRequest.getIdWithCount(), validationStatus);
+            return validationStatus;
+        }
+
+        public void flushAndResetBufferSize() {
+            logger.debug("flushAndResetBufferSize()");
+
+            flush();
+
+            // reset the undecided count
+            this.lastRequestAnalyzed = LockFreeClusterUtils.commitRequestsTail;
+            CommitRequestsBuffer.undecided = 0;
+
+            adjustBufferSize();
+
+        }
+
+        public void flushAndUpdateBufferSize() {
+            logger.debug("flushAndUpdateBufferSize()");
+
+            // grab a reference to 'first' before flushing (being 'null' is allowed)
+            CommitRequest first = this.incommingRequests.peek();
+
+            logger.debug("First request in buffer is {}", first != null ? first.getIdWithCount() : "NULL");
+
+            flush();
+
+            // updates the undecided count up to and excluding 'first'. 'first' may be null, in which case the remainder of the queue is processed
+            // must be done after flush to ensure that 'first' is already enqueued and visible (if != null)
+            updateUndecided(first);
+
+            adjustBufferSize();
+        }
+
+        // no-op if 'first' is null
+        private void flush(/*CommitRequest first*/) throws AssertionError {
             CommitRequest first = this.incommingRequests.peek();
 
             if (first == null) {
-                logger.debug("Release on empty buffer. Nothing to do");
-                return;  // nothing to do
+                logger.debug("flush() called on empty buffer. skipping...");
+                return;
             }
 
-            logger.debug("Releasing commit requests buffer with {} requests. Max size={}", this.incommingRequests.size(),
+            logger.debug("Flushing commit requests buffer with {} requests. Max size={}", this.incommingRequests.size(),
                     this.maxBufferSize);
 
             CommitRequest current = this.incommingRequests.poll();
+//            int maxSendCount = current.getSendCount();
             CommitRequest next;
-            int maxSendCount = current.getSendCount();
-
             while ((next = this.incommingRequests.poll()) != null) {
                 // this should be running on a single thread, so this CAS should never fail
                 if (!current.setNext(next)) {
@@ -410,18 +486,20 @@ public class LockFreeClusterUtils {
             }
 
             addToPublicQueue(first, current);
-
-            checkMaxSize(maxSendCount);
         }
 
-        private void checkMaxSize(int maxSendCount) {
-            // when within [ lastMaxSendCount-1 ; lastMaxSendCount ] keep the current buffer size  
-            if ((maxSendCount < this.lastMaxSendCount - 1) || (maxSendCount > this.lastMaxSendCount)) {
-                logger.debug("Adjusting buffer size from {} to {}.", this.lastMaxSendCount, maxSendCount);
-                setMaxSize(maxSendCount);
-                this.lastMaxSendCount = maxSendCount;
-            }
+        private void adjustBufferSize() {
+            setMaxSize(CommitRequestsBuffer.undecided + 1);
         }
+
+//        private void checkMaxSize(int maxSendCount) {
+//            // when within [ lastMaxSendCount-1 ; lastMaxSendCount ] keep the current buffer size  
+//            if ((maxSendCount < this.lastMaxSendCount - 1) || (maxSendCount > this.lastMaxSendCount)) {
+//                logger.debug("Adjusting buffer size from {} to {}.", this.lastMaxSendCount, maxSendCount);
+//                setMaxSize(maxSendCount);
+//                this.lastMaxSendCount = maxSendCount;
+//            }
+//        }
 
         private void enqueueFailed() throws AssertionError {
             String message = "Impossible condition: failed to enqueue commit request";
@@ -433,7 +511,11 @@ public class LockFreeClusterUtils {
             if (logger.isDebugEnabled()) {
                 StringBuilder str = new StringBuilder();
 
-                str.append("Adding to public commit requests queue:");
+                str.append("Adding to public commit requests queue (first=");
+                str.append(first.getIdWithCount());
+                str.append(", last=");
+                str.append(last.getIdWithCount());
+                str.append("):");
 
                 CommitRequest current = first;
                 do {
@@ -447,6 +529,7 @@ public class LockFreeClusterUtils {
             }
 
             CommitRequest currentTail = LockFreeClusterUtils.commitRequestsTail;
+            logger.debug("currentTail={} (before enqueue)", LockFreeClusterUtils.commitRequestsTail.getIdWithCount());
 
             // this should be running on a single thread, so this CAS should never fail
             if (!currentTail.setNext(first)) {
@@ -455,6 +538,7 @@ public class LockFreeClusterUtils {
 
             // update last known tail
             LockFreeClusterUtils.commitRequestsTail = last;
+            logger.debug("currentTail={} (after enqueue)", LockFreeClusterUtils.commitRequestsTail.getIdWithCount());
         }
     }
 }
