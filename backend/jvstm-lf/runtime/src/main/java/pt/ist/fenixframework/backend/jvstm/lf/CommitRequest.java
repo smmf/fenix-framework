@@ -35,54 +35,6 @@ public class CommitRequest implements DataSerializable {
 
     private static final Logger logger = LoggerFactory.getLogger(CommitRequest.class);
 
-    public static int contention = 1;
-
-    public static int MAX_CONTENTION = 2 << 26;
-
-    public static void increaseContention() {
-//        contention++;
-        int aux = contention << 1;
-        contention = (aux > MAX_CONTENTION ? MAX_CONTENTION : aux);
-    }
-
-    public static void decreaseContention() {
-//        int local = contention - 1;
-//        contention = (local < 0 ? 0 : local);
-        int aux = contention >> 1;
-        contention = (aux == 0 ? 1 : aux);
-    }
-
-    public static boolean contentionExists() {
-        return contention > 10;
-    }
-
-    public static int getContention() {
-        return contention;
-    }
-
-//    public static AtomicInteger contention = new AtomicInteger(0);
-//
-//    private static void increaseContention() {
-//        int value = contention.incrementAndGet();
-////        logger.warn("Contention ++ {}", value);
-//    }
-//
-//    private static void decreaseContention() {
-//        int local = contention.decrementAndGet();
-//        if (local < 0) {
-//            contention.set(0);
-//        }
-////        logger.warn("Contention -- {}", local);
-//    }
-//
-//    public static boolean contentionExists() {
-//        return contention.get() > 10;
-//    }
-//
-//    public static int getContention() {
-//        return contention.get();
-//    }
-
     public enum ValidationStatus {
         UNSET, VALID, UNDECIDED;  // change UNDECIDED TO UNDECIDED, which is different from UNSET!
     }
@@ -126,22 +78,6 @@ public class CommitRequest implements DataSerializable {
             return "SYNC";
         }
 
-//        @Override
-//        public void writeData(ObjectDataOutput out) throws IOException {
-//            out.writeInt(this.serverId);
-////            out.writeInt(this.txVersion);
-//            writeUUID(out, this.id);
-//
-//            out.writeInt(this.validTxVersion);
-//
-//            // there is no set of benign commits
-//            out.writeInt(0);
-//            
-//            this.writeSet.writeTo(out);
-//            out.writeBoolean(this.isWriteOnly);
-//            out.writeInt(this.sendCount);
-//        }
-
     };
 
     public static synchronized CommitRequest makeSentinelRequest() {
@@ -181,11 +117,6 @@ public class CommitRequest implements DataSerializable {
      * The serverId from where the request originates.
      */
     protected int serverId;
-
-//    /**
-//     * The current version of the transaction that creates this commit request.
-//     */
-//    private int txVersion;
 
     /**
      * The current version of the transaction that creates this commit request. Also, the version up to which this request has
@@ -235,11 +166,9 @@ public class CommitRequest implements DataSerializable {
         // required by Hazelcast's DataSerializable
     }
 
-    public CommitRequest(int serverId, /*int txVersion,*/int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet,
-            boolean isWriteOnly) {
+    public CommitRequest(int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet, boolean isWriteOnly) {
         this.id = UUID.randomUUID();
         this.serverId = serverId;
-//        this.txVersion = txVersion;
         this.validTxVersion = validTxVersion;
         this.benignCommits = benignCommits;
         this.writeSet = writeSet;
@@ -263,10 +192,6 @@ public class CommitRequest implements DataSerializable {
     public int getServerId() {
         return this.serverId;
     }
-
-//    public int getTxVersion() {
-//        return this.txVersion;
-//    }
 
     public int getValidTxVersion() {
         return this.validTxVersion;
@@ -344,7 +269,6 @@ public class CommitRequest implements DataSerializable {
     @Override
     public void writeData(ObjectDataOutput out) throws IOException {
         out.writeInt(this.serverId);
-//        out.writeInt(this.txVersion);
         writeUUID(out, this.id);
 
         out.writeInt(this.validTxVersion);
@@ -369,7 +293,6 @@ public class CommitRequest implements DataSerializable {
     @Override
     public void readData(ObjectDataInput in) throws IOException {
         this.serverId = in.readInt();
-//        this.txVersion = in.readInt();
         this.id = readUUID(in);
 
         this.validTxVersion = in.readInt();
@@ -400,7 +323,6 @@ public class CommitRequest implements DataSerializable {
     public String toString() {
         StringBuilder str = new StringBuilder();
         str.append("id=").append(this.getId());
-//        str.append(", txVersion=").append(this.getTxVersion());
         str.append(", validTxVersion=").append(this.getValidTxVersion());
         str.append(", benignCommits={");
         str.append(this.benignCommits.size());
@@ -415,9 +337,6 @@ public class CommitRequest implements DataSerializable {
         str.append("}");
 
         str.append(", serverId=").append(this.getServerId());
-//        str.append(", readset={");
-//        str.append(this.readSet.toString());
-//        str.append("}");
         str.append(", writeset={");
         str.append(this.writeSet.toString());
         str.append("}, isWriteOnly={");
@@ -457,10 +376,8 @@ public class CommitRequest implements DataSerializable {
             }
         } finally {
             if (getValidationStatus() == ValidationStatus.UNDECIDED) {
-//                increaseContention();
                 helper.notifyUndecided(this);
             } else if (getValidationStatus() == ValidationStatus.VALID) {
-//                decreaseContention();
                 helper.notifyValid(this);
             } else {
                 logger.error("Validation cannot be unset at this point!");
@@ -477,7 +394,6 @@ public class CommitRequest implements DataSerializable {
     }
 
     public ValidationStatus getValidationStatus() {
-//        return this.validationStatus;
         return this.validationStatus.get();
     }
 
@@ -487,7 +403,6 @@ public class CommitRequest implements DataSerializable {
      */
     public void setUndecided() {
         logger.debug("Setting commit request {} to UNDECIDED", this.getIdWithCount());
-//        this.validationStatus = ValidationStatus.UNDECIDED;
         ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.UNDECIDED);
         if (previous == ValidationStatus.VALID) {
             String msg = "This is a bug! Validation status must be deterministic!";
@@ -502,7 +417,6 @@ public class CommitRequest implements DataSerializable {
      */
     public void setValid() {
         logger.debug("Setting commit request {} to VALID", this.getIdWithCount());
-//        this.validationStatus = ValidationStatus.VALID;
         ValidationStatus previous = this.validationStatus.getAndSet(ValidationStatus.VALID);
         if (previous == ValidationStatus.UNDECIDED) {
             String msg = "This is a bug! Validation status must be deterministic!";
@@ -526,5 +440,4 @@ public class CommitRequest implements DataSerializable {
         // Always return the commit that really follows
         return this.getNext();
     }
-
 }
