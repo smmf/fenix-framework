@@ -49,15 +49,22 @@ public class SimpleWriteSet {
     }
 
     public void writeTo(DataOutput out) throws IOException {
-        out.writeInt(this.vboxIds.length);
-        for (String vboxId : this.vboxIds) {
-            out.writeUTF(vboxId);
+        // HACK to write just the first 10 elements
+        int sendSize = (this.vboxIds.length > 10 ? 10 : this.vboxIds.length);
+        out.writeInt(sendSize);
+        for (int i = 0; i < sendSize; i++) {
+            out.writeUTF(this.vboxIds[i]);
+        }
 
-            // The values are written to the repository before broadcasting the remote commit
+//        out.writeInt(this.vboxIds.length);
+//        for (String vboxId : this.vboxIds) {
+//            out.writeUTF(vboxId);
+
+        // The values are written to the repository before broadcasting the remote commit
 //            byte[] externalValue = Externalization.externalizeObject(this.values[i]);
 //            out.writeInt(externalValue.length);
 //            out.write(externalValue);
-        }
+//        }
     }
 
     public static SimpleWriteSet readFrom(DataInput in) throws IOException {
