@@ -471,7 +471,7 @@ public class CommitRequest implements DataSerializable {
 
     public static void storeCommitRequest(CommitRequest commitRequest) {
         logger.debug("Update stored commit request: {}", commitRequest.getIdWithCount());
-        commitRequestsMap.putIfAbsent(commitRequest.getId(), commitRequest);
+        commitRequestsMap.put(commitRequest.getId(), commitRequest);
     }
 
     public static void removeCommitRequest(CommitRequest commitRequest) {
@@ -537,6 +537,7 @@ public class CommitRequest implements DataSerializable {
                 this.setUndecided();   // valid?
                 System.exit(1);
             } else {
+                logger.debug("Previous commit request found!");
                 this.serverId = mapped.serverId;
 
                 // merge the benign commits
@@ -548,6 +549,29 @@ public class CommitRequest implements DataSerializable {
                 this.writeSet = mapped.writeSet;
                 this.isWriteOnly = mapped.isWriteOnly;
             }
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder str = new StringBuilder();
+            str.append("id=").append(this.getId());
+            str.append(", validTxVersion=").append(this.getValidTxVersion());
+            str.append(", benignCommits={");
+            str.append(this.benignCommits.size());
+//            int i = 0;
+//            for (UUID uuid : this.benignCommits) {
+//                if (i != 0) {
+//                    str.append(", ");
+//                }
+//                str.append(uuid.toString());
+//                i++;
+//            }
+            str.append("}, sendCount={");
+            str.append(this.sendCount);
+            str.append("}, reset={");
+            str.append(this.reset);
+            str.append("}");
+            return str.toString();
         }
 
 //        @Override

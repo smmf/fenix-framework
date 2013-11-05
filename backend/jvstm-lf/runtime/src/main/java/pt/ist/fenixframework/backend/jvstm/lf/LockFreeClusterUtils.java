@@ -206,6 +206,14 @@ public class LockFreeClusterUtils {
         ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
 
         commitRequest.setTimestamp(System.nanoTime());
+
+        if (logger.isDebugEnabled()) {
+            CommitRequest previous = CommitRequest.lookup(commitRequest.getId());
+            if (previous != null) {
+                long diff = commitRequest.getTimestamp() - previous.getTimestamp();
+                logger.debug("Round-trip time (ns): {}", diff, commitRequest.getIdWithCount());
+            }
+        }
         topic.publish(commitRequest);
     }
 
