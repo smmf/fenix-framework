@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import jvstm.CommitException;
@@ -167,13 +168,27 @@ public class CommitRequest implements DataSerializable {
     }
 
     public CommitRequest(int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet, boolean isWriteOnly) {
-        this.id = UUID.randomUUID();
+        this(UUID.randomUUID(), serverId, validTxVersion, benignCommits, writeSet, isWriteOnly);
+    }
+
+    private CommitRequest(UUID id, int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet,
+            boolean isWriteOnly) {
+        this.id = id;
         this.serverId = serverId;
         this.validTxVersion = validTxVersion;
         this.benignCommits = benignCommits;
         this.writeSet = writeSet;
         this.isWriteOnly = isWriteOnly;
     }
+
+//    private CommitRequest(UUID id, int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet,
+//            boolean isWriteOnly, int sendCount, boolean reset, long timestamp) {
+//        this(id, serverId, validTxVersion, benignCommits, writeSet, isWriteOnly);
+//
+//        this.sendCount = sendCount;
+//        this.reset = reset;
+//        this.timestamp = timestamp;
+//    }
 
     public String getIdWithCount() {
         // this is a benign data race
@@ -423,6 +438,7 @@ public class CommitRequest implements DataSerializable {
             logger.error("msg");
             System.exit(-1);
         }
+        CommitRequest.removeCommitRequest(this);
     }
 
     /**
@@ -440,4 +456,112 @@ public class CommitRequest implements DataSerializable {
         // Always return the commit that really follows
         return this.getNext();
     }
+
+    public CommitRequest getCompleteCommitRequest() {
+        return this;
+    }
+
+    // additional code to use delta commit requests
+
+    private static final ConcurrentHashMap<UUID, CommitRequest> commitRequestsMap = new ConcurrentHashMap<>();
+
+    public static CommitRequest lookup(UUID id) {
+        return commitRequestsMap.get(id);
+    }
+
+    public static void storeCommitRequest(CommitRequest commitRequest) {
+        logger.debug("Update stored commit request: {}", commitRequest.getIdWithCount());
+        commitRequestsMap.putIfAbsent(commitRequest.getId(), commitRequest);
+    }
+
+    public static void removeCommitRequest(CommitRequest commitRequest) {
+        commitRequestsMap.remove(commitRequest.getId());
+    }
+
+    public static class DeltaCommitRequest extends CommitRequest {
+        private static final long serialVersionUID = 1L;
+
+        public DeltaCommitRequest() {
+            super();
+        }
+
+        public DeltaCommitRequest(UUID id, int validTxVersion, Set<UUID> benignCommits, int sendCount) {
+            this.id = id;
+            this.validTxVersion = validTxVersion;
+            this.benignCommits = benignCommits;
+            this.sendCount = sendCount;
+            this.reset = false;
+        }
+
+        @Override
+        public void writeData(ObjectDataOutput out) throws IOException {
+            writeUUID(out, this.id);
+
+            out.writeInt(this.validTxVersion);
+
+            out.writeInt(this.benignCommits.size());
+            for (UUID commitId : this.benignCommits) {
+                writeUUID(out, commitId);
+            }
+
+            out.writeInt(this.sendCount);
+            out.writeBoolean(this.reset);
+            out.writeLong(this.timestamp);
+        }
+
+        @Override
+        public void readData(ObjectDataInput in) throws IOException {
+            this.id = readUUID(in);
+
+            this.validTxVersion = in.readInt();
+
+            int benignCommitsSize = in.readInt();
+            this.benignCommits = new HashSet<UUID>(benignCommitsSize);
+            for (int i = 0; i < benignCommitsSize; i++) {
+                this.benignCommits.add(readUUID(in));
+            }
+
+            this.sendCount = in.readInt();
+            this.reset = in.readBoolean();
+            this.timestamp = in.readLong();
+
+            // inject missing data
+            CommitRequest mapped = CommitRequest.lookup(this.id);
+
+            if (mapped == null) {
+                logger.warn("Previous commit request with id={} not found in map!", this.id);
+                this.serverId = -1;
+                this.benignCommits = Collections.EMPTY_SET;
+                this.writeSet = null;
+                this.isWriteOnly = false; // true?
+                this.setUndecided();   // valid?
+                System.exit(1);
+            } else {
+                this.serverId = mapped.serverId;
+
+                // merge the benign commits
+                HashSet<UUID> newBenignCommits = new HashSet<>();
+                newBenignCommits.addAll(mapped.benignCommits);
+                newBenignCommits.addAll(this.benignCommits);
+
+                this.benignCommits = newBenignCommits;
+                this.writeSet = mapped.writeSet;
+                this.isWriteOnly = mapped.isWriteOnly;
+            }
+        }
+
+//        @Override
+//        public CommitRequest getCompleteCommitRequest() {
+//            CommitRequest mapped = CommitRequest.lookup(this.id);
+//
+//            // merge the benign commits
+//            HashSet<UUID> newBenignCommits = new HashSet<>();
+//            newBenignCommits.addAll(mapped.benignCommits);
+//            newBenignCommits.addAll(this.benignCommits);
+//
+//            return new CommitRequest(mapped.getId(), mapped.serverId, this.validTxVersion, newBenignCommits, mapped.writeSet,
+//                    mapped.isWriteOnly, this.sendCount, this.reset, this.timestamp);
+//        }
+    }
+
 }

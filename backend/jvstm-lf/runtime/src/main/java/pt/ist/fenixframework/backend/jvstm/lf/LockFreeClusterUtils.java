@@ -113,6 +113,9 @@ public class LockFreeClusterUtils {
                     logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
                     requestsBuffer.flushAndResetBufferSize();
                 } else {
+                    // replace the map with this request;
+                    CommitRequest.storeCommitRequest(commitRequest);
+
                     commitRequest.assignTransaction();
                     requestsBuffer.enqueue(commitRequest);
                 }

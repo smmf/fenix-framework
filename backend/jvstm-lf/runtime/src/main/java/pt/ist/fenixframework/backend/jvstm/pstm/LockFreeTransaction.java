@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest;
+import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.DeltaCommitRequest;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.ValidationStatus;
 import pt.ist.fenixframework.backend.jvstm.lf.JvstmLockFreeBackEnd;
 import pt.ist.fenixframework.backend.jvstm.lf.LockFreeClusterUtils;
@@ -308,7 +309,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                     // persist the write set ahead of sending the commit request
                     persistWriteSet(myRequest);
                 } else {
-                    updateCommitRequest(myRequest);
+                    myRequest = updateCommitRequest(myRequest);
 //                    logger.warn("Commit attempts for this tx={}", myRequest.getSendCount());
                 }
 
@@ -451,16 +452,12 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 this.bodiesRead.isEmpty() && this.arraysRead.isEmpty());
     }
 
-    private void updateCommitRequest(CommitRequest myRequest) {
-//        Set<UUID> benignRequestIds = new HashSet<>();
-//
-//        for (CommitRequest commitRequest : this.benignCommitRequestIds) {
-//            benignRequestIds.add(commitRequest.getId());
-//        }
+    private CommitRequest updateCommitRequest(CommitRequest myRequest) {
+        return new DeltaCommitRequest(myRequest.getId(), getNumber(), this.benignCommitRequestIds, myRequest.getSendCount() + 1);
 
-        myRequest.setBenignCommits(this.benignCommitRequestIds);
-        myRequest.incSendCount();
-        myRequest.setValidTxVersion(getNumber());
+//        myRequest.setBenignCommits(this.benignCommitRequestIds);
+//        myRequest.incSendCount();
+//        myRequest.setValidTxVersion(getNumber());
     }
 
 //    private SimpleReadSet makeSimpleReadSet() {
