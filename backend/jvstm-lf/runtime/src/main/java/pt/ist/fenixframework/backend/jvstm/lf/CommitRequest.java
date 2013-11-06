@@ -541,11 +541,12 @@ public class CommitRequest implements DataSerializable {
                 this.serverId = mapped.serverId;
 
                 // merge the benign commits
-                HashSet<UUID> newBenignCommits = new HashSet<>();
-                newBenignCommits.addAll(mapped.benignCommits);
-                newBenignCommits.addAll(this.benignCommits);
+//                HashSet<UUID> newBenignCommits = new HashSet<>();
+//                newBenignCommits.addAll(mapped.benignCommits);
+//                newBenignCommits.addAll(this.benignCommits);
+//                this.benignCommits = newBenignCommits;
+                this.benignCommits.addAll(mapped.benignCommits);
 
-                this.benignCommits = newBenignCommits;
                 this.writeSet = mapped.writeSet;
                 this.isWriteOnly = mapped.isWriteOnly;
             }
