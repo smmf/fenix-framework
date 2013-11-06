@@ -8,6 +8,7 @@
 package pt.ist.fenixframework.backend.jvstm.pstm;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -51,9 +52,19 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     private boolean readOnly = false;
 
     /**
-     * Commit requests that may be committed ahead of this transaction, and that do not invalidate it.
+     * Commit requests seen has undecided that may later be sent has benign requests in this transaction's commit request
      */
-    protected Set<UUID> benignCommitRequestIds;
+    protected Map<UUID, CommitRequest> undecidedMaybeBenign = new HashMap<>();
+
+    /**
+     * IDs of ALL commit requests that may be committed ahead of this transaction, and that do not invalidate it.
+     */
+    protected Set<UUID> allTestedCommitRequestIds = new HashSet<>();
+
+    /**
+     * The reference to the last request processed in the queue of commit requests
+     */
+    private CommitRequest lastProcessedRequest;
 
     // for statistics
     protected int numBoxReads = 0;
@@ -79,15 +90,13 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     public LockFreeTransaction(ActiveTransactionsRecord record) {
         super(record);
 
-        this.benignCommitRequestIds = new HashSet<>();
-
         logger.debug("Initial read version is {}", record.transactionNumber);
 
         upgradeWithPendingCommitsAtBeginning();
     }
 
     protected void upgradeWithPendingCommitsAtBeginning() {
-        processCommitRequests(CommitRequestListener.NO_OP);
+        this.lastProcessedRequest = processCommitRequests(LockFreeClusterUtils.getCommitRequestAtHead(), this);
 
         ActiveTransactionsRecord newRecord = Transaction.mostRecentCommittedRecord;
         logger.debug("Done processing pending commit requests.  Most recent version is {}", newRecord.transactionNumber);
@@ -207,9 +216,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     be decided.
     */
 
-    private CommitRequest processCommitRequests(CommitRequestListener listenerToUse) {
-        // get a transaction and invoke its commit.
-        CommitRequest current = LockFreeClusterUtils.getCommitRequestAtHead();
+    private static CommitRequest processCommitRequests(CommitRequest startingPoint, CommitRequestListener listenerToUse) {
+        CommitRequest current = startingPoint;
         CommitRequest previous = current;  // the head is never null
 
         while (current != null) {
@@ -225,14 +233,17 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
     @Override
     public void notifyValid(CommitRequest commitRequest) {
-        this.benignCommitRequestIds.remove(commitRequest.getId());
+        this.undecidedMaybeBenign.remove(commitRequest.getId());
     }
 
     @Override
     public void notifyUndecided(CommitRequest commitRequest) {
-        if (validAgainstWriteSet(commitRequest.getWriteSet())) {
-            this.benignCommitRequestIds.add(commitRequest.getId());
+        if (!this.allTestedCommitRequestIds.contains(commitRequest.getId())) {
+            this.undecidedMaybeBenign.put(commitRequest.getId(), commitRequest);
         }
+//        if (validAgainstWriteSet(commitRequest.getWriteSet())) {
+//            this.benignCommitRequestIds.add(commitRequest.getId());
+//        }
 
 //        if (!commitRequest.equals(this.myRequestId)) {
 //            updateAverageResends(commitRequest.getSendCount() - 1);
@@ -283,8 +294,11 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             ValidationStatus myFinalStatus = null;
             do {
 
-                CommitRequest lastProcessedRequest = preValidateLocally();
+                this.lastProcessedRequest = preValidateLocally();
                 logger.debug("Tx is locally valid");
+
+                // compute set of benign requests
+                Set<UUID> benignCommitRequestIds = selectBenignRequestsToSend();
 
 //                if (myRequest == null && CommitRequest.contentionExists()) {
 //                    long myWait = CommitRequest.getContention();
@@ -301,7 +315,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
                 if (myRequest == null) { // first try. create the commit request
 //                    logger.warn("First commit attempt");
-                    myRequest = makeCommitRequest();
+                    myRequest = makeCommitRequest(benignCommitRequestIds);
 
                     // the myRequest instance will be different, because it is serialized and deserialized. So, just use its ID to identify it.
                     this.myRequestId = myRequest.getId();
@@ -309,12 +323,12 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                     // persist the write set ahead of sending the commit request
                     persistWriteSet(myRequest);
                 } else {
-                    myRequest = updateCommitRequest(myRequest);
+                    myRequest = updateCommitRequest(myRequest, benignCommitRequestIds);
 //                    logger.warn("Commit attempts for this tx={}", myRequest.getSendCount());
                 }
 
-                // clear the contents of the benign set.  next time it will only include the deltas
-                this.benignCommitRequestIds = new HashSet<>();
+                // clear the contents of the set of undecided requests.  next time we will only include the deltas, so these have been tested anyway
+                this.undecidedMaybeBenign = new HashMap<>();
 
 //                if (myRequest.getSendCount() > 5) {
 //                    logger.warn("Commit request {} is being sent {} times. Size of benign commits is {}", myRequest.getId(),
@@ -325,7 +339,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //            validate();
 //            ensureCommitStatus();
 // replaced with:
-                CommitRequest myHandledRequest = helpedTryCommit(lastProcessedRequest, myRequest);
+                CommitRequest myHandledRequest = helpedTryCommit(this.lastProcessedRequest, myRequest);
                 myFinalStatus = myHandledRequest.getValidationStatus();
                 logger.debug("My request status was {}", myFinalStatus);
 
@@ -334,11 +348,33 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                             this.myRequestId, myHandledRequest.getWriteSet().getVboxIds());
                 }
 
+                this.lastProcessedRequest = myHandledRequest;
+
             } while (myFinalStatus != ValidationStatus.VALID); // we're fully written back here
 
 // From TopLevelTransaction:
             upgradeTx(getCommitTxRecord());  // commitTxRecord was set by the helper LocalCommitOnlyTransaction 
         }
+    }
+
+    /* iterates the undecidedMaybeBenign requests and for those that haven't yet
+    been tested, checks whether they are benign (i.e. their write set does not
+    intersect with my read set).  Side-effect: the set of tested requests is updated */
+    private Set<UUID> selectBenignRequestsToSend() {
+        Set<UUID> benignIds = new HashSet<>();
+
+        for (CommitRequest commitRequest : this.undecidedMaybeBenign.values()) {
+            if (!this.allTestedCommitRequestIds.contains(commitRequest.getId())) {
+
+                this.allTestedCommitRequestIds.add(commitRequest.getId());
+
+                if (validAgainstWriteSet(commitRequest.getWriteSet())) {
+                    benignIds.add(commitRequest.getId());
+                }
+            }
+
+        }
+        return benignIds;
     }
 
     // returns the requests that, even though undecided, could be committed ahead of me without invalidating me
@@ -347,7 +383,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         logger.debug("Validating locally before broadcasting commit request");
 //            ActiveTransactionsRecord lastSeenCommitted = helpCommitAll();
 
-        CommitRequest lastProcessedRequest = processCommitRequests(this);
+        CommitRequest lastProcessedRequest = processCommitRequests(this.lastProcessedRequest, this);
 
         ActiveTransactionsRecord lastSeenCommitted = Transaction.mostRecentCommittedRecord;
         try {
@@ -442,7 +478,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         return commitRequest.getId();
     }
 
-    private CommitRequest makeCommitRequest() {
+    private CommitRequest makeCommitRequest(Set<UUID> benignCommitRequestIds) {
 //        Set<UUID> benignRequestIds = new HashSet<>();
 //
 //        for (CommitRequest commitRequest : this.benignCommitRequestIds) {
@@ -451,12 +487,12 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
 //        logger.debug("Will create commit request for transaction. isWriteOnly={}, readSetSize={}", this.bodiesRead.isEmpty()
 //                && this.arraysRead.isEmpty(), this.bodiesRead.size() + this.arraysRead.size());
-        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), this.benignCommitRequestIds, makeSimpleWriteSet(),
+        return new CommitRequest(DomainClassInfo.getServerId(), getNumber(), benignCommitRequestIds, makeSimpleWriteSet(),
                 this.bodiesRead.isEmpty() && this.arraysRead.isEmpty());
     }
 
-    private CommitRequest updateCommitRequest(CommitRequest myRequest) {
-        return new DeltaCommitRequest(myRequest.getId(), getNumber(), this.benignCommitRequestIds, myRequest.getSendCount() + 1);
+    private CommitRequest updateCommitRequest(CommitRequest myRequest, Set<UUID> benignCommitRequestIds) {
+        return new DeltaCommitRequest(myRequest.getId(), getNumber(), benignCommitRequestIds, myRequest.getSendCount() + 1);
 
 //        myRequest.setBenignCommits(this.benignCommitRequestIds);
 //        myRequest.incSendCount();
