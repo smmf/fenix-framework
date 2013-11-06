@@ -313,6 +313,9 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //                    logger.warn("Commit attempts for this tx={}", myRequest.getSendCount());
                 }
 
+                // clear the contents of the benign set.  next time it will only include the deltas
+                this.benignCommitRequestIds = new HashSet<>();
+
 //                if (myRequest.getSendCount() > 5) {
 //                    logger.warn("Commit request {} is being sent {} times. Size of benign commits is {}", myRequest.getId(),
 //                            myRequest.getSendCount(), myRequest.getBenignCommits().size());
