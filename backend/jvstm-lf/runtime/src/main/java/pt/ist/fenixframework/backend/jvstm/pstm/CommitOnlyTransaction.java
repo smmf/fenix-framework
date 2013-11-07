@@ -33,7 +33,7 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
     public final static ConcurrentHashMap<UUID, LockFreeTransaction> commitsMap =
             new ConcurrentHashMap<UUID, LockFreeTransaction>();
 
-    public static ConcurrentHashMap<Integer, ActiveTransactionsRecord> activeRecordsMap = new ConcurrentHashMap<>();
+    public static final ConcurrentHashMap<Integer, ActiveTransactionsRecord> activeRecordsMap = new ConcurrentHashMap<>();
 
     public static void addToActiveRecordsMap(ActiveTransactionsRecord record) {
         logger.debug("Adding record version {} to activeRecordsMap.", record.transactionNumber);
@@ -390,15 +390,20 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
     @Override
     protected void helpCommit(ActiveTransactionsRecord recordToCommit) {
         if (!recordToCommit.isCommitted()) {
-            logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
 
-            int txVersion = recordToCommit.transactionNumber;
-            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+            // HACK: To avoid timeouts (deadlocks?) in EHCache
+            if (Thread.currentThread().getName().equals("Commit helper 1")) {
+                logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
 
-            if (commitId != null) { // may be null if it was already persisted 
-                JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
+                int txVersion = recordToCommit.transactionNumber;
+                String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+
+                if (commitId != null) { // may be null if it was already persisted 
+                    JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
 //                CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
+                }
             }
+
             super.helpCommit(recordToCommit);
         } else {
             logger.debug("Version {} was already fully committed", recordToCommit.transactionNumber);

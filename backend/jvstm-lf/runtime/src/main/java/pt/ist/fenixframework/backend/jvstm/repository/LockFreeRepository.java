@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import pt.ist.fenixframework.backend.jvstm.JVSTMConfig;
 import pt.ist.fenixframework.backend.jvstm.lf.JvstmLockFreeConfig;
 import pt.ist.fenixframework.backend.jvstm.lf.SimpleWriteSet;
+import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.DomainClassInfo;
 import pt.ist.fenixframework.backend.jvstm.pstm.VBox;
 import pt.ist.fenixframework.backend.jvstm.pstm.VersionedValue;
@@ -431,6 +432,17 @@ public class LockFreeRepository implements ExtendedRepository {
         replaceTail(box, oldestValidBody, tail);
     }
 
+    // HACK: To avoid timeouts (deadlocks?) in EHCache, only the committer writes its mapping to the persistence.  To make sure that it's there when needed the reloads make a little pause with this sleepHack
+    private static void sleepHack() {
+        logger.warn("Sleeping hack!!!!!!!!!!!!");
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+
     @Override
     public void reloadAttributeSingleVersion(VBox box, jvstm.VBoxBody body) {
         int versionToLoad = body.version;
@@ -672,7 +684,18 @@ public class LockFreeRepository implements ExtendedRepository {
     }
 
     private String getCommitIdForVersion(int versionToLoad) {
-        String commitId = LockFreeRepository.this.dataGrid.get(versionToLoad);
+        /* First, we try to use locally cached information.  Only if absent will
+        we look it up from the DataGrid.  Actually, when the algorithm is changed
+        so that a new member receives the cached map from another member, this
+        lookup will only need to be performed from the cached.  The persisted
+        information is only necessary in case the system goes down for durability.
+        */
+        String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(versionToLoad);
+        if (commitId == null) {
+            logger.warn("No mem cached commitId for tx version {}.  Will load from DataGrid.", versionToLoad);
+            sleepHack(); // needed until someone provides the initial cache values on member init
+            commitId = LockFreeRepository.this.dataGrid.get(versionToLoad);
+        }
         return commitId;
     }
 

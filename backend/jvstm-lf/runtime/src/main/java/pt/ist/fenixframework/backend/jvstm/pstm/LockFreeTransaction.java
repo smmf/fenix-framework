@@ -346,6 +346,16 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
                 if (myFinalStatus == ValidationStatus.VALID) {
                     logger.debug("Commit: version={{}}, id={{}}, writeset={{}}", getCommitTxRecord().transactionNumber,
                             this.myRequestId, myHandledRequest.getWriteSet().getVboxIds());
+
+                    // HACK: To avoid timeouts (deadlocks?) in EHCache only the committer writes to the persistence.
+                    int txVersion = this.getCommitTxRecord().transactionNumber;
+                    String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+
+                    if (commitId != null) { // may be null if it was already persisted 
+                        JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
+//                        CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
+                    }
+
                 }
 
                 this.lastProcessedRequest = myHandledRequest;
@@ -634,26 +644,26 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         return next;
     }
 
-    /* When this tx is performing local validation before sending its commit
-    record, it will helpcommit those in front of itself that are waiting for
-    write-back.  But, those need to persist their map txversion->commitId also,
-    so we override helpCommit here for that reason. */
-    @Override
-    protected void helpCommit(ActiveTransactionsRecord recordToCommit) {
-        if (!recordToCommit.isCommitted()) {
-            logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
-
-            int txVersion = recordToCommit.transactionNumber;
-            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
-
-            if (commitId != null) { // may be null if it was already persisted 
-                JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
-//                CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
-            }
-            super.helpCommit(recordToCommit);
-        } else {
-            logger.debug("Version {} was already fully committed", recordToCommit.transactionNumber);
-        }
-    }
+//    /* When this tx is performing local validation before sending its commit
+//    record, it will helpcommit those in front of itself that are waiting for
+//    write-back.  But, those need to persist their map txversion->commitId also,
+//    so we override helpCommit here for that reason. */
+//    @Override
+//    protected void helpCommit(ActiveTransactionsRecord recordToCommit) {
+//        if (!recordToCommit.isCommitted()) {
+//            logger.debug("Helping to commit version {}", recordToCommit.transactionNumber);
+//
+//            int txVersion = recordToCommit.transactionNumber;
+//            String commitId = CommitOnlyTransaction.txVersionToCommitIdMap.get(txVersion);
+//
+//            if (commitId != null) { // may be null if it was already persisted 
+//                JvstmLockFreeBackEnd.getInstance().getRepository().mapTxVersionToCommitId(txVersion, commitId);
+////                CommitOnlyTransaction.txVersionToCommitIdMap.remove(txVersion);
+//            }
+//            super.helpCommit(recordToCommit);
+//        } else {
+//            logger.debug("Version {} was already fully committed", recordToCommit.transactionNumber);
+//        }
+//    }
 
 }
