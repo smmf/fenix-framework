@@ -462,9 +462,11 @@ public class LockFreeRepository implements ExtendedRepository {
 
                 // store the list of vboxids in commitId
 
+                String commitIdStr = commitId.toString();
+
                 String[] vBoxIds = writeSet.getVboxIds();
                 int size = vBoxIds.length;
-                LockFreeRepository.this.dataGrid.put(makeKeyFor(commitId), vBoxIds);
+                LockFreeRepository.this.dataGrid.put(makeKeyFor(commitIdStr), vBoxIds);
 
                 // store each value associated with vboxid:commitId
                 Object[] values = writeSet.getValues();
@@ -473,7 +475,7 @@ public class LockFreeRepository implements ExtendedRepository {
                     String vboxId = vBoxIds[i];
                     Object newValue = (values[i] == nullObject) ? null : values[i];
 
-                    String key = makeKeyWithCommitId(vboxId, commitId.toString());
+                    String key = makeKeyWithCommitId(vboxId, commitIdStr);
 
                     DataHolder newVersion = new DataHolder(newValue);
 
@@ -765,8 +767,8 @@ public class LockFreeRepository implements ExtendedRepository {
         return oldest;
     }
 
-    private static String makeKeyFor(UUID uuid) {
-        return ":" + uuid.toString() + ":";
+    private static String makeKeyFor(String uuidStr) {
+        return ":" + uuidStr + ":";
     }
 
     private static String makeKeyFor(VBox vbox) {
