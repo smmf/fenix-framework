@@ -107,6 +107,23 @@ public class CommitRequest implements DataSerializable {
         };
     }
 
+    protected static enum SerializedCommitRequestType {
+        BASE {
+            @Override
+            public CommitRequest makeInstance() {
+                return new CommitRequest();
+            }
+        },
+        DELTA {
+            @Override
+            public CommitRequest makeInstance() {
+                return new DeltaCommitRequest();
+            }
+        };
+
+        public abstract CommitRequest makeInstance();
+    };
+
     private transient String idWithCount;
 
     /**
@@ -334,6 +351,11 @@ public class CommitRequest implements DataSerializable {
         return new UUID(in.readLong(), in.readLong());
     }
 
+    // must be overridden in any sub CommitRequest type that can be de-serialized in BatchCommitRequest
+    protected SerializedCommitRequestType getSerializedType() {
+        return SerializedCommitRequestType.BASE;
+    }
+
     @Override
     public String toString() {
         StringBuilder str = new StringBuilder();
@@ -552,6 +574,12 @@ public class CommitRequest implements DataSerializable {
             }
         }
 
+        // must be overridden in any sub CommitRequest type that can be de-serialized in BatchCommitRequest
+        @Override
+        protected SerializedCommitRequestType getSerializedType() {
+            return SerializedCommitRequestType.DELTA;
+        }
+
         @Override
         public String toString() {
             StringBuilder str = new StringBuilder();
@@ -587,6 +615,48 @@ public class CommitRequest implements DataSerializable {
 //            return new CommitRequest(mapped.getId(), mapped.serverId, this.validTxVersion, newBenignCommits, mapped.writeSet,
 //                    mapped.isWriteOnly, this.sendCount, this.reset, this.timestamp);
 //        }
+    }
+
+    public static class BatchCommitRequest extends CommitRequest {
+
+        private static final long serialVersionUID = 1L;
+
+        CommitRequest[] requests;
+
+        public BatchCommitRequest() {
+            super();
+        }
+
+        public BatchCommitRequest(CommitRequest[] requests) {
+            this.requests = requests;
+        }
+
+        @Override
+        public void writeData(ObjectDataOutput out) throws IOException {
+            out.writeInt(this.requests.length);
+            for (CommitRequest request : this.requests) {
+                out.writeInt(request.getSerializedType().ordinal());
+                request.writeData(out);
+            }
+        }
+
+        @Override
+        public void readData(ObjectDataInput in) throws IOException {
+            int size = in.readInt();
+            this.requests = new CommitRequest[size];
+            for (int i = 0; i < size; i++) {
+                this.requests[i] = SerializedCommitRequestType.values()[in.readInt()].makeInstance();
+                this.requests[i].readData(in);
+            }
+        }
+
+        public CommitRequest[] getRequests() {
+            return this.requests;
+        }
+    }
+
+    public static BatchCommitRequest makeBatch(CommitRequest[] commitRequests) {
+        return new BatchCommitRequest(commitRequests);
     }
 
 }
