@@ -7,9 +7,10 @@
  */
 package pt.ist.fenixframework.backend.jvstm.lf;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.PriorityQueue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.BatchCommitRequest;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.ValidationStatus;
 import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
+import pt.ist.fenixframework.util.FenixFrameworkThread;
 
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
@@ -43,9 +45,9 @@ public class LockFreeClusterUtils {
      */
     private static CommitRequestsBuffer requestsBuffer;// = new CommitRequestsBuffer();
 
-    private static final ConcurrentLinkedQueue<CommitRequest> sendBuffer = new ConcurrentLinkedQueue<>();
-    private static final long SEND_BUFFER_TIME_LIMIT = Long.MAX_VALUE;
-    private static final long SEND_BUFFER_SIZE_LIMIT = 1;
+    private static final LinkedBlockingQueue<CommitRequest> sendBuffer = new LinkedBlockingQueue<>();
+//    private static final long SEND_BUFFER_TIME_LIMIT = Long.MAX_VALUE;
+//    private static final long SEND_BUFFER_SIZE_LIMIT = 1;
 
     // commit requests that have not been applied yet
     private static final AtomicReference<CommitRequest> commitRequestsHead = new AtomicReference<CommitRequest>();
@@ -77,6 +79,9 @@ public class LockFreeClusterUtils {
 
         com.hazelcast.config.Config hzlCfg = thisConfig.getHazelcastConfig();
         HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
+
+        // start the thread that sends commit requests
+        new SendBufferThread().start();
 
 //        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(thisConfig.getExpectedInitialNodes() * 4);
         LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(getCommitRequestAtHead());
@@ -217,71 +222,9 @@ public class LockFreeClusterUtils {
         return intId;
     }
 
-    public static void sendCommitRequestBuffered(CommitRequest commitRequest) {
-        commitRequest.setTimestamp(System.nanoTime());
-        synchronized (LockFreeClusterUtils.class) {
-
-            LockFreeClusterUtils.sendBuffer.offer(commitRequest);
-
-            if (commitRequest.getReset() || commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())
-                    || sendBufferTimedOut(commitRequest.getTimestamp()) || sendBufferAtLimit()) {
-                flushSendBuffer();
-            }
-        }
-    }
-
-    private static boolean sendBufferAtLimit() {
-        return LockFreeClusterUtils.sendBuffer.size() >= LockFreeClusterUtils.SEND_BUFFER_SIZE_LIMIT;
-    }
-
-    private static boolean sendBufferTimedOut(long currentTimestamp) {
-        return currentTimestamp - LockFreeClusterUtils.sendBuffer.peek().getTimestamp() > SEND_BUFFER_TIME_LIMIT;
-    }
-
-    private static void flushSendBuffer() {
-        CommitRequest[] commitRequests =
-                LockFreeClusterUtils.sendBuffer.toArray(new CommitRequest[LockFreeClusterUtils.sendBuffer.size()]);
-        logger.debug("Sending a batch of {} commit requests.", commitRequests.length);
-
-        ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
-
-        BatchCommitRequest batch = CommitRequest.makeBatch(commitRequests);
-
-        if (logger.isDebugEnabled()) {
-            for (CommitRequest commitRequest : batch.getRequests()) {
-                CommitRequest previous = CommitRequest.lookup(commitRequest.getId());
-                if (previous != null) {
-                    long diff = commitRequest.getTimestamp() - previous.getTimestamp();
-                    logger.debug("Round-trip time (ns): {}", diff, commitRequest.getIdWithCount());
-                }
-            }
-        }
-
-        topic.publish(CommitRequest.makeBatch(commitRequests));
-
-        LockFreeClusterUtils.sendBuffer.clear();
-    }
-
     public static void sendCommitRequest(CommitRequest commitRequest) {
-        sendCommitRequestBuffered(commitRequest);
-
-//        // test for debug, because computing commitRequest.toString() is expensive
-//        if (logger.isDebugEnabled()) {
-//            logger.debug("Send commit request to others: {}", commitRequest);
-//        }
-//
-//        ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
-//
-//        commitRequest.setTimestamp(System.nanoTime());
-//
-//        if (logger.isDebugEnabled()) {
-//            CommitRequest previous = CommitRequest.lookup(commitRequest.getId());
-//            if (previous != null) {
-//                long diff = commitRequest.getTimestamp() - previous.getTimestamp();
-//                logger.debug("Round-trip time (ns): {}", diff, commitRequest.getIdWithCount());
-//            }
-//        }
-//        topic.publish(commitRequest);
+        commitRequest.setTimestamp(System.nanoTime());
+        LockFreeClusterUtils.sendBuffer.offer(commitRequest);
     }
 
     /**
@@ -402,6 +345,7 @@ public class LockFreeClusterUtils {
         return barrier.await(Long.MAX_VALUE, TimeUnit.DAYS);
     }
 
+    // A buffer for the INCOMING commit requests
     static class CommitRequestsBuffer {
         private static final long MAX_WAIT_TIME_NANOS = 100_000L;
         /**
@@ -663,4 +607,87 @@ public class LockFreeClusterUtils {
             logger.debug("currentTail={} (after enqueue)", LockFreeClusterUtils.commitRequestsTail.getIdWithCount());
         }
     }
+
+    private static class SendBufferThread extends FenixFrameworkThread {
+
+        protected SendBufferThread() {
+            super("FF Commits Sender");
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                // wait for an element
+                CommitRequest first;
+                try {
+                    first = LockFreeClusterUtils.sendBuffer.take();
+                } catch (InterruptedException e) {
+                    logger.warn("Commit requests sender thread was interrupted.  Terminating...");
+                    return;
+                }
+
+                flushSendBuffer(first);
+            }
+        }
+
+//      public static void sendCommitRequestBuffered(CommitRequest commitRequest) {
+//      commitRequest.setTimestamp(System.nanoTime());
+//      synchronized (LockFreeClusterUtils.class) {
+//
+//          LockFreeClusterUtils.sendBuffer.offer(commitRequest);
+//
+//          if (commitRequest.getReset() || commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())
+//                  || sendBufferTimedOut(commitRequest.getTimestamp()) || sendBufferAtLimit()) {
+//              flushSendBuffer();
+//          }
+//      }
+//  }
+
+//        private boolean sendBufferAtLimit() {
+//            return LockFreeClusterUtils.sendBuffer.size() >= LockFreeClusterUtils.SEND_BUFFER_SIZE_LIMIT;
+//        }
+//
+//        private boolean sendBufferTimedOut(long currentTimestamp) {
+//            return currentTimestamp - LockFreeClusterUtils.sendBuffer.peek().getTimestamp() > SEND_BUFFER_TIME_LIMIT;
+//        }
+
+        private static void flushSendBuffer(CommitRequest first) {
+            ArrayList<CommitRequest> commitRequests = new ArrayList<>(100);
+            commitRequests.add(first);
+
+            // take as many as there are available
+            CommitRequest current;
+            while ((current = LockFreeClusterUtils.sendBuffer.poll()) != null) {
+                commitRequests.add(current);
+            }
+
+            CommitRequest toSend;
+            if (commitRequests.size() == 1) { // send single request
+                toSend = commitRequests.get(0);
+                logger.debug("Sending a single commit request: {}", toSend.getIdWithCount());
+            } else { // send a batch of requests
+                CommitRequest[] requestsArray = commitRequests.toArray(new CommitRequest[commitRequests.size()]);
+                logger.debug("Sending a batch of {} commit requests.", requestsArray.length);
+
+                BatchCommitRequest batch = CommitRequest.makeBatch(requestsArray);
+
+                if (logger.isDebugEnabled()) {
+                    for (CommitRequest commitRequest : batch.getRequests()) {
+                        CommitRequest previous = CommitRequest.lookup(commitRequest.getId());
+                        if (previous != null) {
+                            long diff = commitRequest.getTimestamp() - previous.getTimestamp();
+                            logger.debug("Round-trip time (ns): {}", diff, commitRequest.getIdWithCount());
+                        }
+                    }
+                }
+
+                toSend = batch;
+            }
+
+            ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
+            topic.publish(toSend);
+        }
+
+    }
+
 }
