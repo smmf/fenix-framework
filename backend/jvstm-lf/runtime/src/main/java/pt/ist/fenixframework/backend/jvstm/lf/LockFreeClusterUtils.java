@@ -48,6 +48,7 @@ public class LockFreeClusterUtils {
     private static final LinkedBlockingQueue<CommitRequest> sendBuffer = new LinkedBlockingQueue<>();
 //    private static final long SEND_BUFFER_TIME_LIMIT = Long.MAX_VALUE;
 //    private static final long SEND_BUFFER_SIZE_LIMIT = 1;
+    private static final LinkedBlockingQueue<CommitRequest> receiveBuffer = new LinkedBlockingQueue<>();
 
     // commit requests that have not been applied yet
     private static final AtomicReference<CommitRequest> commitRequestsHead = new AtomicReference<CommitRequest>();
@@ -89,6 +90,9 @@ public class LockFreeClusterUtils {
         // register listener for commit requests
         registerListenerForCommitRequests();
 
+        // start the thread that receives commit requests
+        new ReceiveBufferThread().start();
+
         /* some repositories may not implement correctly the initial state
         transfer mechanism.  So, we wait until the initial number of nodes is
         up before continuing with the initialization.  This allows us to work
@@ -111,40 +115,52 @@ public class LockFreeClusterUtils {
         ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
 
         topic.addMessageListener(new MessageListener<CommitRequest>() {
-
             @Override
-            public final void onMessage(Message<CommitRequest> message) {
-                CommitRequest commitRequest = message.getMessageObject();
-
-                if (commitRequest instanceof BatchCommitRequest) {
-                    deliverBatch(((BatchCommitRequest) commitRequest).getRequests());
-                } else {
-                    deliverSingle(commitRequest);
+            public void onMessage(Message<CommitRequest> message) {
+                try {
+                    LockFreeClusterUtils.receiveBuffer.put(message.getMessageObject());
+                } catch (InterruptedException e) {
+                    logger.warn("Interrupted while delivering commit request message. Failing delivery");
+                    System.exit(1);
                 }
             }
+        });
 
-            public final void deliverBatch(CommitRequest[] commitRequests) {
-                for (CommitRequest commitRequest : commitRequests) {
-                    deliverSingle(commitRequest);
-                }
-            }
-
-            public final void deliverSingle(CommitRequest commitRequest) {
-                logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getIdWithCount(),
-                        commitRequest.getServerId());
-
-                // check for SYNC
-                if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
-                    logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
-                    requestsBuffer.flushAndResetBufferSize();
-                } else {
-                    // replace the map with this request;
-                    CommitRequest.storeCommitRequest(commitRequest);
-
-                    commitRequest.assignTransaction();
-                    requestsBuffer.enqueue(commitRequest);
-                }
-            }
+//        topic.addMessageListener(new MessageListener<CommitRequest>() {
+//
+//            @Override
+//            public final void onMessage(Message<CommitRequest> message) {
+//                CommitRequest commitRequest = message.getMessageObject();
+//
+//                if (commitRequest instanceof BatchCommitRequest) {
+//                    deliverBatch(((BatchCommitRequest) commitRequest).getRequests());
+//                } else {
+//                    deliverSingle(commitRequest);
+//                }
+//            }
+//
+//            public final void deliverBatch(CommitRequest[] commitRequests) {
+//                for (CommitRequest commitRequest : commitRequests) {
+//                    deliverSingle(commitRequest);
+//                }
+//            }
+//
+//            public final void deliverSingle(CommitRequest commitRequest) {
+//                logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getIdWithCount(),
+//                        commitRequest.getServerId());
+//
+//                // check for SYNC
+//                if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
+//                    logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
+//                    requestsBuffer.flushAndResetBufferSize();
+//                } else {
+//                    // replace the map with this request;
+//                    CommitRequest.storeCommitRequest(commitRequest);
+//
+//                    commitRequest.assignTransaction();
+//                    requestsBuffer.enqueue(commitRequest);
+//                }
+//            }
 
 //            private final void enqueueCommitRequest(CommitRequest commitRequest) {
 //                CommitRequest last = commitRequestsTail;
@@ -163,7 +179,7 @@ public class LockFreeClusterUtils {
 //                throw new AssertionError(message);
 //            }
 
-        });
+//        });
     }
 
 //    public static void initGlobalCommittedNumber(int value) {
@@ -690,4 +706,54 @@ public class LockFreeClusterUtils {
 
     }
 
+    private static class ReceiveBufferThread extends FenixFrameworkThread {
+
+        protected ReceiveBufferThread() {
+            super("FF Commits Receiver");
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                CommitRequest commitRequest;
+                try {
+                    commitRequest = LockFreeClusterUtils.receiveBuffer.take();
+                } catch (InterruptedException e) {
+                    logger.warn("Commit requests receiver thread was interrupted.  Terminating...");
+                    return;
+                }
+
+                if (commitRequest instanceof BatchCommitRequest) {
+                    deliverBatch(((BatchCommitRequest) commitRequest).getRequests());
+                } else {
+                    deliverSingle(commitRequest);
+                }
+            }
+
+        }
+
+        public final static void deliverBatch(CommitRequest[] commitRequests) {
+            for (CommitRequest commitRequest : commitRequests) {
+                deliverSingle(commitRequest);
+            }
+        }
+
+        public final static void deliverSingle(CommitRequest commitRequest) {
+            logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getIdWithCount(),
+                    commitRequest.getServerId());
+
+            // check for SYNC
+            if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
+                logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
+                requestsBuffer.flushAndResetBufferSize();
+            } else {
+                // fill in missing data in case of delta request and replace the map with this request;
+                commitRequest.updateLocalInfo();
+
+                commitRequest.assignTransaction();
+                requestsBuffer.enqueue(commitRequest);
+            }
+        }
+
+    }
 }
