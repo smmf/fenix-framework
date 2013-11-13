@@ -274,6 +274,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     protected long T2 = 0L;
     protected long T3 = 0L;
     protected long T4 = 0L;
+    protected long T4_1 = 0L;
+    protected long T4_2 = 0L;
     protected long T5 = 0L;
 
     protected int tries = 0;
@@ -282,6 +284,11 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
     protected long afterValidate;
     protected long afterCommitRequestAndPersist;
     protected long afterBroadcast;
+
+    protected long _4_beforeWaitForNext;
+    protected long _4_afterWaitForNext;
+    protected long _4_afterHandleRequest;
+
     protected long afterMyCommit;
     protected long afterMappingTxVersion;
 
@@ -397,8 +404,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
 //            System.out.println("{C} tries=" + this.tries + " T1=" + this.T1 + " T2=" + this.T2 + " T3=" + this.T3 + " T4="
 //                    + this.T4 + " T5=" + this.T5);
-            System.out.println("{C}," + this.tries + "," + this.T1 + "," + this.T2 + "," + this.T3 + " ," + this.T4 + ","
-                    + this.T5);
+            System.out.println("{C}," + this.tries + "," + this.T1 + "," + this.T2 + "," + this.T3 + "," + this.T4 + ","
+                    + this.T4_1 + "," + this.T4_2 + "," + this.T5);
 // From TopLevelTransaction:
             upgradeTx(getCommitTxRecord());  // commitTxRecord was set by the helper LocalCommitOnlyTransaction 
         }
@@ -612,51 +619,35 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
      * @throws CommitException if the validation of my request failed
      */
     protected CommitRequest tryCommit(CommitRequest lastProcessedRequest) throws CommitException {
-        // get a transaction and invoke its commit.
+        // get a transaction and invoke its commit until mine is processed
 
-//        CommitRequest current = lastProcessedRequest;
-        CommitRequest current = waitForNextRequest(lastProcessedRequest);
+        CommitRequest current = lastProcessedRequest;
+        do {
+            this._4_beforeWaitForNext = System.nanoTime();
 
-        long startTime = System.nanoTime();
+            current = waitForNextRequest(current);
 
-        while (true) {
+            this._4_afterWaitForNext = System.nanoTime();
+            this.T4_1 += (this._4_afterWaitForNext - this._4_beforeWaitForNext);
+
             if (logger.isDebugEnabled()) {
                 logger.debug("Will handle commit request: {}", current);
             }
 
-            CommitRequest next = current.handle(this);
+            current.handle(this);
+
+            this._4_afterHandleRequest = System.nanoTime();
+            this.T4_2 += (this._4_afterHandleRequest - this._4_afterWaitForNext);
+
             if (current.getId().equals(this.myRequestId)) {
                 logger.debug("Processed up to commit request: {}. ValidationStatus: {}", this.myRequestId.toString(),
                         current.getValidationStatus());
-
-//                boolean valid = current.getValidationStatus() == ValidationStatus.VALID;
-//                if (!valid) {
-////                    TransactionSignaller.SIGNALLER.signalCommitFail();
-////                    throw new AssertionError("Impossible condition - Commit fail signalled!");
-//
-//                    /* My validation was undecided. Now I must check whether I'm goo*/
-//
-//                }
 
                 // we're done, regardless of whether we're fully committed
                 return current;
             }
 
-            if (next == null) {
-                /* Next is null, so we know that there is nothing more for now.
-                We just wait for 'next' to arrive, because we still need to
-                handle our own request.  Note that the algorithm is lock-free
-                under the assumption that delivery of our own request to our own
-                node is guaranteed to occur! */
-                logger.debug("Waiting for my own commit request to arrive to the queue.");
-                if (startTime != 0 && checkSyncTimeout(startTime)) {
-                    startTime = 0; // this disables resending a sync.  no need for multiple syncs
-                }
-                continue;
-            } else {
-                current = next;
-            }
-        }
+        } while (true);
     }
 
     protected static boolean checkSyncTimeout(long startTime) {
