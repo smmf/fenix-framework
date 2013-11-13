@@ -666,7 +666,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         CommitRequest next = null;
         long startTime = System.nanoTime();
         while ((next = lastProcessedRequest.getNext()) == null) {
-            Thread.yield();
+//            Thread.yield();
             if (startTime != 0 && checkSyncTimeout(startTime)) {
                 startTime = 0;
             }
