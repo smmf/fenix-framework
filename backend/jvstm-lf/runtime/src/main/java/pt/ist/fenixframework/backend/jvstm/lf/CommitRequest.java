@@ -485,6 +485,10 @@ public class CommitRequest implements DataSerializable {
 
     // additional code to use delta commit requests
 
+    public void updateLocalInfo() {
+        CommitRequest.storeCommitRequest(this);
+    }
+
     private static final ConcurrentHashMap<UUID, CommitRequest> commitRequestsMap = new ConcurrentHashMap<>();
 
     public static CommitRequest lookup(UUID id) {
@@ -546,7 +550,10 @@ public class CommitRequest implements DataSerializable {
             this.sendCount = in.readInt();
             this.reset = in.readBoolean();
             this.timestamp = in.readLong();
+        }
 
+        @Override
+        public void updateLocalInfo() {
             // inject missing data
             CommitRequest mapped = CommitRequest.lookup(this.id);
 
@@ -572,6 +579,8 @@ public class CommitRequest implements DataSerializable {
                 this.writeSet = mapped.writeSet;
                 this.isWriteOnly = mapped.isWriteOnly;
             }
+
+            super.updateLocalInfo();
         }
 
         // must be overridden in any sub CommitRequest type that can be de-serialized in BatchCommitRequest
