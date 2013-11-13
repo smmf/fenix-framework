@@ -269,6 +269,22 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         super.doCommit();
     }
 
+    // statistics
+    protected long T1 = 0L;
+    protected long T2 = 0L;
+    protected long T3 = 0L;
+    protected long T4 = 0L;
+    protected long T5 = 0L;
+
+    protected int tries = 0;
+
+    protected long beforeValidate;
+    protected long afterValidate;
+    protected long afterCommitRequestAndPersist;
+    protected long afterBroadcast;
+    protected long afterMyCommit;
+    protected long afterMappingTxVersion;
+
     /* This is the main entrance point for the lock-free commit. We override
     tryCommit, and we do not call super.trycommit().  We reuse the commitTx
     machinery in LocalCommitOnlyTransaction, which is the instance that we create
@@ -294,8 +310,15 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
             ValidationStatus myFinalStatus = null;
             do {
 
+                tries++;
+
+                this.beforeValidate = System.nanoTime();
+
                 this.lastProcessedRequest = preValidateLocally();
                 logger.debug("Tx is locally valid");
+
+                this.afterValidate = System.nanoTime();
+                this.T1 += (this.afterValidate - this.beforeValidate);
 
                 // compute set of benign requests
                 Set<UUID> benignCommitRequestIds = selectBenignRequestsToSend();
@@ -327,6 +350,9 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //                    logger.warn("Commit attempts for this tx={}", myRequest.getSendCount());
                 }
 
+                this.afterCommitRequestAndPersist = System.nanoTime();
+                this.T2 += (this.afterCommitRequestAndPersist - this.afterValidate);
+
                 // clear the contents of the set of undecided requests.  next time we will only include the deltas, so these have been tested anyway
                 this.undecidedMaybeBenign = new HashMap<>();
 
@@ -340,6 +366,10 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //            ensureCommitStatus();
 // replaced with:
                 CommitRequest myHandledRequest = helpedTryCommit(this.lastProcessedRequest, myRequest);
+
+                this.afterMyCommit = System.nanoTime();
+                this.T4 += (this.afterMyCommit - this.afterBroadcast);
+
                 myFinalStatus = myHandledRequest.getValidationStatus();
                 logger.debug("My request status was {}", myFinalStatus);
 
@@ -362,6 +392,13 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
             } while (myFinalStatus != ValidationStatus.VALID); // we're fully written back here
 
+            this.afterMappingTxVersion = System.nanoTime();
+            this.T5 += (this.afterMappingTxVersion - this.afterMyCommit);
+
+//            System.out.println("{C} tries=" + this.tries + " T1=" + this.T1 + " T2=" + this.T2 + " T3=" + this.T3 + " T4="
+//                    + this.T4 + " T5=" + this.T5);
+            System.out.println("{C}," + this.tries + "," + this.T1 + "," + this.T2 + "," + this.T3 + " ," + this.T4 + ","
+                    + this.T5);
 // From TopLevelTransaction:
             upgradeTx(getCommitTxRecord());  // commitTxRecord was set by the helper LocalCommitOnlyTransaction 
         }
@@ -471,6 +508,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 //        CommitRequest currentRequest = LockFreeClusterUtils.getCommitRequestAtHead();
 
         broadcastCommitRequest(myRequest);
+        this.afterBroadcast = System.nanoTime();
+        this.T3 += (this.afterBroadcast - this.afterCommitRequestAndPersist);
 
         return tryCommit(lastProcessedRequest);
     }
