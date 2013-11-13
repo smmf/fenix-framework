@@ -70,5 +70,6 @@
    <UFC max_credits="1m" min_threshold="0.40"/>
    <MFC max_credits="1m" min_threshold="0.40"/>
    <FRAG2 frag_size="30k"  />
+   <COUNTER bypass_bundling="true" timeout="5000"/
    <RSVP timeout="60000" resend_interval="500" ack_on_delivery="false" />
 </config>

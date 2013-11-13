@@ -14,6 +14,7 @@ import jvstm.TransactionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pt.ist.fenixframework.ConfigError;
 import pt.ist.fenixframework.FenixFramework;
 import pt.ist.fenixframework.backend.jvstm.JVSTMBackEnd;
 import pt.ist.fenixframework.backend.jvstm.JVSTMConfig;
@@ -56,7 +57,11 @@ public class JvstmLockFreeBackEnd extends JVSTMBackEnd {
         class inited.  We ensure that by setting up the transaction factory above. */
 
         logger.info("initializeGroupCommunication()");
-        LockFreeClusterUtils.initializeGroupCommunication(thisConfig);
+        try {
+            LockFreeClusterUtils.initializeGroupCommunication(thisConfig);
+        } catch (Exception e) {
+            throw new ConfigError("Failed to initialize group communication", e);
+        }
 
         int serverId = obtainNewServerId();
         boolean firstNode = (serverId == 0);

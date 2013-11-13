@@ -14,21 +14,23 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.jgroups.JChannel;
+import org.jgroups.ReceiverAdapter;
+import org.jgroups.View;
+import org.jgroups.blocks.atomic.Counter;
+import org.jgroups.blocks.atomic.CounterService;
+import org.jgroups.util.Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pt.ist.fenixframework.FenixFramework;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.BatchCommitRequest;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.ValidationStatus;
 import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
 import pt.ist.fenixframework.util.FenixFrameworkThread;
 
-import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
-import com.hazelcast.core.IAtomicLong;
 import com.hazelcast.core.ICountDownLatch;
-import com.hazelcast.core.ITopic;
-import com.hazelcast.core.Message;
-import com.hazelcast.core.MessageListener;
 
 public class LockFreeClusterUtils {
 
@@ -74,12 +76,12 @@ public class LockFreeClusterUtils {
     private LockFreeClusterUtils() {
     }
 
-    public static void initializeGroupCommunication(JvstmLockFreeConfig thisConfig) {
+    public static void initializeGroupCommunication(JvstmLockFreeConfig thisConfig) throws Exception {
         commitRequestsHead.set(CommitRequest.makeSentinelRequest());
         commitRequestsTail = getCommitRequestAtHead();
 
-        com.hazelcast.config.Config hzlCfg = thisConfig.getHazelcastConfig();
-        HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
+//        com.hazelcast.config.Config hzlCfg = thisConfig.getHazelcastConfig();
+//        HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
 
         // start the thread that sends commit requests
         new SendBufferThread().start();
@@ -99,87 +101,39 @@ public class LockFreeClusterUtils {
         with "initially-stateless" repositories in addition to the 'normal'
         state-transfer-enabled ones. */
 
-        int expectedInitialNodes = thisConfig.getExpectedInitialNodes();
-        if (expectedInitialNodes > 1) {
-            logger.info("Waiting for the initial number of nodes: {}", expectedInitialNodes);
-
-            waitForMembers("backend-jvstm-cluster-init-barrier", expectedInitialNodes);
-
-            logger.info("All initial nodes are available");
-        }
+//        int expectedInitialNodes = thisConfig.getExpectedInitialNodes();
+//        if (expectedInitialNodes > 1) {
+//            logger.info("Waiting for the initial number of nodes: {}", expectedInitialNodes);
+//
+//            waitForMembers("backend-jvstm-cluster-init-barrier", expectedInitialNodes);
+//
+//            logger.info("All initial nodes are available");
+//        }
     }
 
 //    private static final ReentrantLock ENQUEUE_LOCK = new ReentrantLock(true);
 
-    private static void registerListenerForCommitRequests() {
-        ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
+    private static JChannel commitsChannel;
+    private static JChannel counterChannel;
+    private static CounterService counterService;
 
-        topic.addMessageListener(new MessageListener<CommitRequest>() {
+    private static void registerListenerForCommitRequests() throws Exception {
+        commitsChannel = new JChannel(FenixFramework.getConfig().getJGroupsConfigFile());
+        commitsChannel.setReceiver(new ReceiverAdapter() {
             @Override
-            public void onMessage(Message<CommitRequest> message) {
+            public void receive(org.jgroups.Message msg) {
                 try {
-                    LockFreeClusterUtils.receiveBuffer.put(message.getMessageObject());
+                    LockFreeClusterUtils.receiveBuffer.put((CommitRequest) msg.getObject());
                 } catch (InterruptedException e) {
-                    logger.warn("Interrupted while delivering commit request message. Failing delivery");
-                    System.exit(1);
+                    logger.warn("Interrupted while waiting for the commit request arrivals queue to become available.  Terminating receive operation.");
                 }
             }
         });
 
-//        topic.addMessageListener(new MessageListener<CommitRequest>() {
-//
-//            @Override
-//            public final void onMessage(Message<CommitRequest> message) {
-//                CommitRequest commitRequest = message.getMessageObject();
-//
-//                if (commitRequest instanceof BatchCommitRequest) {
-//                    deliverBatch(((BatchCommitRequest) commitRequest).getRequests());
-//                } else {
-//                    deliverSingle(commitRequest);
-//                }
-//            }
-//
-//            public final void deliverBatch(CommitRequest[] commitRequests) {
-//                for (CommitRequest commitRequest : commitRequests) {
-//                    deliverSingle(commitRequest);
-//                }
-//            }
-//
-//            public final void deliverSingle(CommitRequest commitRequest) {
-//                logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getIdWithCount(),
-//                        commitRequest.getServerId());
-//
-//                // check for SYNC
-//                if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
-//                    logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
-//                    requestsBuffer.flushAndResetBufferSize();
-//                } else {
-//                    // replace the map with this request;
-//                    CommitRequest.storeCommitRequest(commitRequest);
-//
-//                    commitRequest.assignTransaction();
-//                    requestsBuffer.enqueue(commitRequest);
-//                }
-//            }
+        commitsChannel.connect(FF_COMMIT_TOPIC_NAME);
 
-//            private final void enqueueCommitRequest(CommitRequest commitRequest) {
-//                CommitRequest last = commitRequestsTail;
-//
-//                // according to Hazelcast, onMessage() runs on a single thread, so this CAS should never fail
-//                if (!last.setNext(commitRequest)) {
-//                    enqueueFailed();
-//                }
-//                // update last known tail
-//                commitRequestsTail = commitRequest;
-//            }
-//
-//            private void enqueueFailed() throws AssertionError {
-//                String message = "Impossible condition: failed to enqueue commit request";
-//                logger.error(message);
-//                throw new AssertionError(message);
-//            }
+        logger.debug("This channel {} its own messages", (commitsChannel.getDiscardOwnMessages() ? "DISCARDS" : "KEEPS"));
 
-//        });
     }
 
 //    public static void initGlobalCommittedNumber(int value) {
@@ -197,15 +151,19 @@ public class LockFreeClusterUtils {
     public static void notifyStartupComplete() {
         logger.info("Notify other nodes that startup completed");
 
-        IAtomicLong initMarker = getHazelcastInstance().getAtomicLong("initMarker");
+        Counter initMarker = counterService.getOrCreateCounter("initMarker", 0);
         initMarker.incrementAndGet();
+
+//        IAtomicLong initMarker = getHazelcastInstance().getAtomicLong("initMarker");
+//        initMarker.incrementAndGet();
     }
 
     public static void waitForStartupFromFirstNode() {
         logger.info("Waiting for startup from first node");
 
         // check initMarker in AtomicNumber (value 1)
-        IAtomicLong initMarker = getHazelcastInstance().getAtomicLong("initMarker");
+//        IAtomicLong initMarker = getHazelcastInstance().getAtomicLong("initMarker");
+        Counter initMarker = counterService.getOrCreateCounter("initMarker", 0);
 
         while (initMarker.get() == 0) {
             logger.debug("Waiting for first node to startup...");
@@ -225,17 +183,29 @@ public class LockFreeClusterUtils {
         to appear.  By reusing numbers with the cluster alive, we either don't
         reuse 0 or change the algorithm  that detects the first member */
 
-        IAtomicLong serverIdGenerator = getHazelcastInstance().getAtomicLong("serverId");
-        long longId = serverIdGenerator.getAndAdd(1L);
+//        IAtomicLong serverIdGenerator = getHazelcastInstance().getAtomicLong("serverId");
+//        long longId = serverIdGenerator.getAndAdd(1L);
+        try {
+            counterChannel = new JChannel(FenixFramework.getConfig().getJGroupsConfigFile());
+            counterService = new CounterService(counterChannel);
+            counterChannel.connect("ff.counterService");
+            Counter counter = counterService.getOrCreateCounter("serverId", -1);
 
-        logger.info("Got (long) serverId: {}", longId);
+            long longId = counter.addAndGet(1L);
 
-        int intId = (int) longId;
-        if (intId != longId) {
-            throw new Error("Failed to obtain a valid id");
+            logger.info("Got (long) serverId: {}", longId);
+
+            int intId = (int) longId;
+            if (intId != longId) {
+                throw new Error("Failed to obtain a valid id");
+            }
+
+            return intId;
+        } catch (Exception e) {
+            logger.error("Failed to obtain a serverId: {}", e);
+            System.exit(1);
+            return 0;  // The compiler requires it... sad.
         }
-
-        return intId;
     }
 
     public static void sendCommitRequest(CommitRequest commitRequest) {
@@ -289,9 +259,11 @@ public class LockFreeClusterUtils {
     }
 
     public static void shutdown() {
-        HazelcastInstance hzl = getHazelcastInstance();
-        hzl.getTopic(FF_COMMIT_TOPIC_NAME).destroy();
-        hzl.getLifecycleService().shutdown();
+//        HazelcastInstance hzl = getHazelcastInstance();
+//        hzl.getTopic(FF_COMMIT_TOPIC_NAME).destroy();
+//        hzl.getLifecycleService().shutdown();
+
+        Util.close(commitsChannel, counterChannel);
 
         /* strangely this is here.  Perhaps we should move these clear()s
         elsewhere. They are needed when the classes are reused via
@@ -307,12 +279,15 @@ public class LockFreeClusterUtils {
      * @return The number of members in the cluster or <code>-1</code> if the information is not available
      */
     public static int getNumMembers() {
-        if (!getHazelcastInstance().getLifecycleService().isRunning()) {
-            return -1;
-        } else {
-            return getHazelcastInstance().getCluster().getMembers().size();
-        }
-
+//        if (!getHazelcastInstance().getLifecycleService().isRunning()) {
+//            return -1;
+//        } else {
+//            return getHazelcastInstance().getCluster().getMembers().size();
+//        }
+        View view = commitsChannel.getView();
+        int numMembers = view != null ? view.size() : 0;
+        logger.debug("getNumMembers() -> {}", numMembers);
+        return numMembers;
     }
 
     /* This is intended as a replacement for JGroup's-based implementation of
@@ -700,10 +675,15 @@ public class LockFreeClusterUtils {
                 toSend = batch;
             }
 
-            ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
-            topic.publish(toSend);
+//            ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
+//            topic.publish(toSend);
+            try {
+                commitsChannel.send(null, toSend);
+            } catch (Exception e) {
+                logger.error("Failed to send commit request {}", toSend.getIdWithCount());
+                System.exit(1);
+            }
         }
-
     }
 
     private static class ReceiveBufferThread extends FenixFrameworkThread {
