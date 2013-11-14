@@ -7,7 +7,12 @@
  */
 package pt.ist.fenixframework.backend.jvstm.lf;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.Externalizable;
 import java.io.IOException;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -30,7 +35,7 @@ import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.DataSerializable;
 
-public class CommitRequest implements DataSerializable {
+public class CommitRequest implements DataSerializable, Externalizable {
 
     private static final long serialVersionUID = 1L;
 
@@ -51,16 +56,9 @@ public class CommitRequest implements DataSerializable {
     public static UUID UUID_RESERVED_SENTINEL = new UUID(0, 0);
     public static UUID UUID_RESERVED_SYNC = new UUID(0, 1);
 
-    public static final CommitRequest SYNC_REQUEST = new CommitRequest() {
-        private static final long serialVersionUID = 3L;
-
-        {
-            this.id = UUID_RESERVED_SYNC;
-            this.serverId = -1;
-            this.validTxVersion = -1;
-            this.benignCommits = Collections.emptySet();
-            this.writeSet = new SimpleWriteSet(new String[0]);
-            this.isWriteOnly = false;
+    private static final class SyncCommitRequest extends CommitRequest {
+        public SyncCommitRequest() {
+            super(UUID_RESERVED_SYNC, -1, -1, Collections.<UUID> emptySet(), new SimpleWriteSet(new String[0]), false);
             this.reset = true;
         }
 
@@ -80,6 +78,8 @@ public class CommitRequest implements DataSerializable {
         }
 
     };
+
+    public static final CommitRequest SYNC_REQUEST = new SyncCommitRequest();
 
     public static synchronized CommitRequest makeSentinelRequest() {
         return new CommitRequest() {
@@ -188,7 +188,7 @@ public class CommitRequest implements DataSerializable {
         this(UUID.randomUUID(), serverId, validTxVersion, benignCommits, writeSet, isWriteOnly);
     }
 
-    private CommitRequest(UUID id, int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet,
+    protected CommitRequest(UUID id, int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet,
             boolean isWriteOnly) {
         this.id = id;
         this.serverId = serverId;
@@ -298,8 +298,19 @@ public class CommitRequest implements DataSerializable {
         }
     }
 
+    // Hazelcast's DataSerializable interface
     @Override
     public void writeData(ObjectDataOutput out) throws IOException {
+        writeToDataOutput(out);
+    }
+
+    // Externalizable interface
+    @Override
+    public void writeExternal(ObjectOutput out) throws IOException {
+        writeToDataOutput(out);
+    }
+
+    public void writeToDataOutput(DataOutput out) throws IOException {
         out.writeInt(this.serverId);
         writeUUID(out, this.id);
 
@@ -322,8 +333,19 @@ public class CommitRequest implements DataSerializable {
         out.writeLong(this.timestamp);
     }
 
+    // Hazelcast's DataSerializable interface
     @Override
     public void readData(ObjectDataInput in) throws IOException {
+        readFromDataInput(in);
+    }
+
+    // Externalizable interface
+    @Override
+    public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
+        readFromDataInput(in);
+    }
+
+    public void readFromDataInput(DataInput in) throws IOException {
         this.serverId = in.readInt();
         this.id = readUUID(in);
 
@@ -342,12 +364,12 @@ public class CommitRequest implements DataSerializable {
         this.timestamp = in.readLong();
     }
 
-    protected void writeUUID(ObjectDataOutput out, UUID uuid) throws IOException {
+    protected void writeUUID(DataOutput out, UUID uuid) throws IOException {
         out.writeLong(uuid.getMostSignificantBits());
         out.writeLong(uuid.getLeastSignificantBits());
     }
 
-    protected UUID readUUID(ObjectDataInput in) throws IOException {
+    protected UUID readUUID(DataInput in) throws IOException {
         return new UUID(in.readLong(), in.readLong());
     }
 
@@ -501,6 +523,7 @@ public class CommitRequest implements DataSerializable {
     }
 
     public static void removeCommitRequest(CommitRequest commitRequest) {
+        logger.debug("Removing commitRequest={} from commitRequestsMap", commitRequest.getIdWithCount());
         commitRequestsMap.remove(commitRequest.getId());
     }
 
@@ -520,7 +543,7 @@ public class CommitRequest implements DataSerializable {
         }
 
         @Override
-        public void writeData(ObjectDataOutput out) throws IOException {
+        public void writeToDataOutput(DataOutput out) throws IOException {
             writeUUID(out, this.id);
 
             out.writeInt(this.validTxVersion);
@@ -536,7 +559,7 @@ public class CommitRequest implements DataSerializable {
         }
 
         @Override
-        public void readData(ObjectDataInput in) throws IOException {
+        public void readFromDataInput(DataInput in) throws IOException {
             this.id = readUUID(in);
 
             this.validTxVersion = in.readInt();
@@ -558,7 +581,8 @@ public class CommitRequest implements DataSerializable {
             CommitRequest mapped = CommitRequest.lookup(this.id);
 
             if (mapped == null) {
-                logger.warn("Previous commit request with id={} not found in map!", this.id);
+                logger.warn("Previous commit request with id={} not found in map! Current={}", this.getId(),
+                        this.getIdWithCount());
                 this.serverId = -1;
                 this.benignCommits = Collections.EMPTY_SET;
                 this.writeSet = null;
@@ -566,7 +590,8 @@ public class CommitRequest implements DataSerializable {
                 this.setUndecided();   // valid?
                 System.exit(1);
             } else {
-                logger.debug("Previous commit request found!");
+                logger.debug("Previous commit request found! This={}, previous={}", this.getIdWithCount(),
+                        mapped.getIdWithCount());
                 this.serverId = mapped.serverId;
 
                 // merge the benign commits
@@ -641,21 +666,21 @@ public class CommitRequest implements DataSerializable {
         }
 
         @Override
-        public void writeData(ObjectDataOutput out) throws IOException {
+        public void writeToDataOutput(DataOutput out) throws IOException {
             out.writeInt(this.requests.length);
             for (CommitRequest request : this.requests) {
                 out.writeInt(request.getSerializedType().ordinal());
-                request.writeData(out);
+                request.writeToDataOutput(out);
             }
         }
 
         @Override
-        public void readData(ObjectDataInput in) throws IOException {
+        public void readFromDataInput(DataInput in) throws IOException {
             int size = in.readInt();
             this.requests = new CommitRequest[size];
             for (int i = 0; i < size; i++) {
                 this.requests[i] = SerializedCommitRequestType.values()[in.readInt()].makeInstance();
-                this.requests[i].readData(in);
+                this.requests[i].readFromDataInput(in);
             }
         }
 
