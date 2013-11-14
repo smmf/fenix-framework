@@ -153,6 +153,9 @@ public abstract class CommitOnlyTransaction extends TopLevelTransaction {
         will necessarily appear after it and be considered UNDECIDED by all nodes
         */
         if (existingRec == null) {
+            logger.warn("No activeTxRecord found for commitRequest={} in validTxVersion={}", this.commitRequest.getIdWithCount(),
+                    this.commitRequest.getValidTxVersion());
+
             logger.debug("Commit request {} is UNDECIDED", this.commitRequest.getIdWithCount());
             this.commitRequest.setUndecided();
             /* Still, we throw exception to ensure that our own flow does not proceed to enqueueing */
