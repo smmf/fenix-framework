@@ -7,6 +7,7 @@
  */
 package pt.ist.fenixframework.backend.jvstm.lf;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.PriorityQueue;
@@ -17,6 +18,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pt.ist.fenixframework.ConfigError;
+import pt.ist.fenixframework.backend.jvstm.comms.CommSystem;
+import pt.ist.fenixframework.backend.jvstm.comms.MessageProcessor;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.BatchCommitRequest;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest.ValidationStatus;
 import pt.ist.fenixframework.backend.jvstm.pstm.CommitOnlyTransaction;
@@ -26,19 +30,15 @@ import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.IAtomicLong;
 import com.hazelcast.core.ICountDownLatch;
-import com.hazelcast.core.ITopic;
-import com.hazelcast.core.Message;
-import com.hazelcast.core.MessageListener;
 
 public class LockFreeClusterUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(LockFreeClusterUtils.class);
-//    private static final String FF_GLOBAL_LOCK_NAME = "ff.hzl.global.lock";
-//    private static final String FF_GLOBAL_LOCK_NUMBER_NAME = "ff.hzl.global.lock.number";
-//    private static final long FF_GLOBAL_LOCK_LOCKED_VALUE = -1;
-    public static final String FF_COMMIT_TOPIC_NAME = "ff.hzl.commits";
 
+    public static final String FF_COMMIT_TOPIC_NAME = "ff.hzl.commits";
     private static HazelcastInstance HAZELCAST_INSTANCE;
+
+    private static CommSystem commSystem;
 
     /**
      * A buffer for the commit requests.
@@ -78,17 +78,38 @@ public class LockFreeClusterUtils {
         commitRequestsHead.set(CommitRequest.makeSentinelRequest());
         commitRequestsTail = getCommitRequestAtHead();
 
+        // first initialize the hazelcast system that is used regardless of the CommSystem being Hazelcast or 0MQ
+
         com.hazelcast.config.Config hzlCfg = thisConfig.getHazelcastConfig();
         HAZELCAST_INSTANCE = Hazelcast.newHazelcastInstance(hzlCfg);
+
+        commSystem = null;
+
+        try {
+            commSystem = Class.forName(thisConfig.getCommSystemClassName()).asSubclass(CommSystem.class).newInstance();
+        } catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
+            String msg = "Failed to initialize comm system: {}";
+            logger.error(msg, e);
+            throw new ConfigError(msg, e);
+        }
+
+        commSystem.init(new MessageProcessor() {
+            @Override
+            public void process(CommitRequest cr) {
+                try {
+                    LockFreeClusterUtils.receiveBuffer.put(cr);
+                } catch (InterruptedException e) {
+                    logger.warn("Interrupted while delivering commit request message. Failing delivery");
+                    System.exit(1);
+                }
+            }
+        });
 
         // start the thread that sends commit requests
         new SendBufferThread().start();
 
-//        LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(thisConfig.getExpectedInitialNodes() * 4);
+        // initialize the buffer for the incoming commit requests
         LockFreeClusterUtils.requestsBuffer = new CommitRequestsBuffer(getCommitRequestAtHead());
-
-        // register listener for commit requests
-        registerListenerForCommitRequests();
 
         // start the thread that receives commit requests
         new ReceiveBufferThread().start();
@@ -111,77 +132,6 @@ public class LockFreeClusterUtils {
 
 //    private static final ReentrantLock ENQUEUE_LOCK = new ReentrantLock(true);
 
-    private static void registerListenerForCommitRequests() {
-        ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
-
-        topic.addMessageListener(new MessageListener<CommitRequest>() {
-            @Override
-            public void onMessage(Message<CommitRequest> message) {
-                try {
-                    LockFreeClusterUtils.receiveBuffer.put(message.getMessageObject());
-                } catch (InterruptedException e) {
-                    logger.warn("Interrupted while delivering commit request message. Failing delivery");
-                    System.exit(1);
-                }
-            }
-        });
-
-//        topic.addMessageListener(new MessageListener<CommitRequest>() {
-//
-//            @Override
-//            public final void onMessage(Message<CommitRequest> message) {
-//                CommitRequest commitRequest = message.getMessageObject();
-//
-//                if (commitRequest instanceof BatchCommitRequest) {
-//                    deliverBatch(((BatchCommitRequest) commitRequest).getRequests());
-//                } else {
-//                    deliverSingle(commitRequest);
-//                }
-//            }
-//
-//            public final void deliverBatch(CommitRequest[] commitRequests) {
-//                for (CommitRequest commitRequest : commitRequests) {
-//                    deliverSingle(commitRequest);
-//                }
-//            }
-//
-//            public final void deliverSingle(CommitRequest commitRequest) {
-//                logger.debug("Received commit request message. id={}, serverId={}", commitRequest.getIdWithCount(),
-//                        commitRequest.getServerId());
-//
-//                // check for SYNC
-//                if (commitRequest.getId().equals(CommitRequest.SYNC_REQUEST.getId())) {
-//                    logger.debug("SYNC received. Don't enqueue it. Just flush and reset.");
-//                    requestsBuffer.flushAndResetBufferSize();
-//                } else {
-//                    // replace the map with this request;
-//                    CommitRequest.storeCommitRequest(commitRequest);
-//
-//                    commitRequest.assignTransaction();
-//                    requestsBuffer.enqueue(commitRequest);
-//                }
-//            }
-
-//            private final void enqueueCommitRequest(CommitRequest commitRequest) {
-//                CommitRequest last = commitRequestsTail;
-//
-//                // according to Hazelcast, onMessage() runs on a single thread, so this CAS should never fail
-//                if (!last.setNext(commitRequest)) {
-//                    enqueueFailed();
-//                }
-//                // update last known tail
-//                commitRequestsTail = commitRequest;
-//            }
-//
-//            private void enqueueFailed() throws AssertionError {
-//                String message = "Impossible condition: failed to enqueue commit request";
-//                logger.error(message);
-//                throw new AssertionError(message);
-//            }
-
-//        });
-    }
-
 //    public static void initGlobalCommittedNumber(int value) {
 //        AtomicNumber lockNumber = getHazelcastInstance().getAtomicNumber(FF_GLOBAL_LOCK_NUMBER_NAME);
 //        lockNumber.compareAndSet(0, value);
@@ -190,7 +140,7 @@ public class LockFreeClusterUtils {
     // the instance should have been initialized in a single thread within the
     // FenixFramework static initializer's lock (via the invocation of the method
     // initializeGroupCommunication.
-    private static HazelcastInstance getHazelcastInstance() {
+    public static HazelcastInstance getHazelcastInstance() {
         return HAZELCAST_INSTANCE;
     }
 
@@ -642,7 +592,12 @@ public class LockFreeClusterUtils {
                     return;
                 }
 
-                flushSendBuffer(first);
+                try {
+                    flushSendBuffer(first);
+                } catch (IOException e) {
+                    String msg = "Failed to send ";
+
+                }
             }
         }
 
@@ -667,7 +622,7 @@ public class LockFreeClusterUtils {
 //            return currentTimestamp - LockFreeClusterUtils.sendBuffer.peek().getTimestamp() > SEND_BUFFER_TIME_LIMIT;
 //        }
 
-        private static void flushSendBuffer(CommitRequest first) {
+        private static void flushSendBuffer(CommitRequest first) throws IOException {
             ArrayList<CommitRequest> commitRequests = new ArrayList<>(100);
             commitRequests.add(first);
 
@@ -700,8 +655,7 @@ public class LockFreeClusterUtils {
                 toSend = batch;
             }
 
-            ITopic<CommitRequest> topic = getHazelcastInstance().getTopic(FF_COMMIT_TOPIC_NAME);
-            topic.publish(toSend);
+            commSystem.sendMessage(toSend.toByteArray());
         }
 
     }

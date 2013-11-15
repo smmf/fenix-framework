@@ -7,8 +7,12 @@
  */
 package pt.ist.fenixframework.backend.jvstm.lf;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInput;
+import java.io.DataInputStream;
 import java.io.DataOutput;
+import java.io.DataOutputStream;
 import java.io.Externalizable;
 import java.io.IOException;
 import java.io.ObjectInput;
@@ -31,11 +35,7 @@ import pt.ist.fenixframework.backend.jvstm.pstm.LocalCommitOnlyTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.LockFreeTransaction;
 import pt.ist.fenixframework.backend.jvstm.pstm.RemoteCommitOnlyTransaction;
 
-import com.hazelcast.nio.ObjectDataInput;
-import com.hazelcast.nio.ObjectDataOutput;
-import com.hazelcast.nio.serialization.DataSerializable;
-
-public class CommitRequest implements DataSerializable, Externalizable {
+public class CommitRequest implements Externalizable {
 
     private static final long serialVersionUID = 1L;
 
@@ -70,6 +70,21 @@ public class CommitRequest implements DataSerializable, Externalizable {
         @Override
         public void internalHandle() {
             // no-op
+        }
+
+        @Override
+        public void writeToDataOutput(DataOutput out) throws IOException {
+            // no-op
+        }
+
+        @Override
+        public void readFromDataInput(DataInput in) throws IOException {
+            // no-op
+        }
+
+        @Override
+        protected SerializedCommitRequestType getSerializedType() {
+            return SerializedCommitRequestType.SYNC;
         }
 
         @Override
@@ -118,6 +133,18 @@ public class CommitRequest implements DataSerializable, Externalizable {
             @Override
             public CommitRequest makeInstance() {
                 return new DeltaCommitRequest();
+            }
+        },
+        BATCH {
+            @Override
+            public CommitRequest makeInstance() {
+                return new BatchCommitRequest();
+            }
+        },
+        SYNC {
+            @Override
+            public CommitRequest makeInstance() {
+                return SYNC_REQUEST;
             }
         };
 
@@ -181,7 +208,7 @@ public class CommitRequest implements DataSerializable, Externalizable {
     private CommitOnlyTransaction transaction;
 
     public CommitRequest() {
-        // required by Hazelcast's DataSerializable
+        // required by the serialization code
     }
 
     public CommitRequest(int serverId, int validTxVersion, Set<UUID> benignCommits, SimpleWriteSet writeSet, boolean isWriteOnly) {
@@ -298,12 +325,6 @@ public class CommitRequest implements DataSerializable, Externalizable {
         }
     }
 
-    // Hazelcast's DataSerializable interface
-    @Override
-    public void writeData(ObjectDataOutput out) throws IOException {
-        writeToDataOutput(out);
-    }
-
     // Externalizable interface
     @Override
     public void writeExternal(ObjectOutput out) throws IOException {
@@ -331,12 +352,6 @@ public class CommitRequest implements DataSerializable, Externalizable {
         out.writeInt(this.sendCount);
         out.writeBoolean(this.reset);
         out.writeLong(this.timestamp);
-    }
-
-    // Hazelcast's DataSerializable interface
-    @Override
-    public void readData(ObjectDataInput in) throws IOException {
-        readFromDataInput(in);
     }
 
     // Externalizable interface
@@ -376,6 +391,44 @@ public class CommitRequest implements DataSerializable, Externalizable {
     // must be overridden in any sub CommitRequest type that can be de-serialized in BatchCommitRequest
     protected SerializedCommitRequestType getSerializedType() {
         return SerializedCommitRequestType.BASE;
+    }
+
+    public byte[] toByteArray() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            DataOutputStream dos = new DataOutputStream(baos);
+            // write the type of this request
+            dos.writeInt(getSerializedType().ordinal());
+            // write its contents
+            writeToDataOutput(dos);
+            dos.close();
+        } catch (IOException ioe) {
+            logger.error("Failed to transform commit request into a byte array");
+            ioe.printStackTrace();
+            throw ioe;
+        }
+
+        return baos.toByteArray();
+    }
+
+    public static CommitRequest makeCommitRequest(byte[] bytes) throws IOException {
+        CommitRequest commitRequest = null;
+        try {
+            ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+            DataInputStream dis = new DataInputStream(bais);
+            // read the type of request
+            SerializedCommitRequestType type = SerializedCommitRequestType.values()[dis.readInt()];
+            logger.debug("Creating a commit request from byte[]. Type={}", type);
+            commitRequest = type.makeInstance();
+            // read its contents
+            commitRequest.readFromDataInput(dis);
+            dis.close();
+        } catch (IOException ioe) {
+            logger.error("Failed to reconstruct a commit request from a byte array");
+            ioe.printStackTrace();
+            throw ioe;
+        }
+        return commitRequest;
     }
 
     @Override
@@ -608,7 +661,7 @@ public class CommitRequest implements DataSerializable, Externalizable {
             super.updateLocalInfo();
         }
 
-        // must be overridden in any sub CommitRequest type that can be de-serialized in BatchCommitRequest
+        // must be overridden in any sub CommitRequest type that can be de-serialized
         @Override
         protected SerializedCommitRequestType getSerializedType() {
             return SerializedCommitRequestType.DELTA;
@@ -682,6 +735,11 @@ public class CommitRequest implements DataSerializable, Externalizable {
                 this.requests[i] = SerializedCommitRequestType.values()[in.readInt()].makeInstance();
                 this.requests[i].readFromDataInput(in);
             }
+        }
+
+        @Override
+        protected SerializedCommitRequestType getSerializedType() {
+            return SerializedCommitRequestType.BATCH;
         }
 
         public CommitRequest[] getRequests() {
