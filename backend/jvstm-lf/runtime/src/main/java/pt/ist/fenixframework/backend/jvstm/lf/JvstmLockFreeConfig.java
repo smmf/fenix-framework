@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import pt.ist.fenixframework.backend.jvstm.JVSTMConfig;
+import pt.ist.fenixframework.backend.jvstm.comms.hazelcast.HazelcastCommSystem;
 
 import com.hazelcast.config.ClasspathXmlConfig;
 import com.hazelcast.config.TopicConfig;
@@ -38,8 +39,20 @@ public class JvstmLockFreeConfig extends JVSTMConfig {
      */
     protected String hazelcastConfigFile = "fenix-framework-lf-hazelcast-default.xml";
 
+    /**
+     * This <strong>optional</strong> parameter specifies the group communication system to use to broadcast the commit requests.
+     * The value should be the name of a class that implements
+     * pt.ist.fenixframework.backend.jvstm.comms.CommSystem. It defaults to
+     * pt.ist.fenixframework.backend.jvstm.comms.HazelcastCommSystem.
+     */
+    protected String commSystemClassName = HazelcastCommSystem.class.getCanonicalName();
+
     public String getHazelcastConfigFile() {
-        return hazelcastConfigFile;
+        return this.hazelcastConfigFile;
+    }
+
+    public String getCommSystemClassName() {
+        return this.commSystemClassName;
     }
 
     /**

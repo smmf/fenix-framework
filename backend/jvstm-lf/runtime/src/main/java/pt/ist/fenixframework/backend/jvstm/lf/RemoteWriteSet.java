@@ -23,7 +23,7 @@ public class RemoteWriteSet extends WriteSet {
 
     /* This empty WriteSet instance is used to quickly initialize this
     RemoteCommitOnlyTransaction instance.  Remember that such code is running
-    in Hazelcast's delivery thread and we want it to be quick.   Later, when we
+    in the comm system's delivery thread and we want it to be quick.   Later, when we
     decide on the validation status of this request we'll CAS this write set
     for the real one. */
     public static final WriteSet EMPTY = new RemoteWriteSet();
