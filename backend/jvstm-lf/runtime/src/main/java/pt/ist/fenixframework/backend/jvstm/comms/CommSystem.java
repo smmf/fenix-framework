@@ -4,4 +4,6 @@ public interface CommSystem {
     public void init(MessageProcessor msgProc);
 
     public void sendMessage(byte[] data);
+
+    public void startSequencer();
 }

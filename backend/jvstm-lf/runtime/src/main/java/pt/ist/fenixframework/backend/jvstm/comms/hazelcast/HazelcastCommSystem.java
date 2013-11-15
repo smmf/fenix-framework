@@ -44,4 +44,9 @@ public class HazelcastCommSystem implements CommSystem {
         ITopic<byte[]> topic = LockFreeClusterUtils.getHazelcastInstance().getTopic(LockFreeClusterUtils.FF_COMMIT_TOPIC_NAME);
         topic.publish(data);
     }
+
+    @Override
+    public void startSequencer() {
+        // no-op
+    }
 }
