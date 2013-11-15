@@ -88,7 +88,7 @@ public class LockFreeClusterUtils {
         try {
             commSystem = Class.forName(thisConfig.getCommSystemClassName()).asSubclass(CommSystem.class).newInstance();
         } catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
-            String msg = "Failed to initialize comm system: {}";
+            String msg = "Failed to initialize comm system.";
             logger.error(msg, e);
             throw new ConfigError(msg, e);
         }
@@ -142,6 +142,10 @@ public class LockFreeClusterUtils {
     // initializeGroupCommunication.
     public static HazelcastInstance getHazelcastInstance() {
         return HAZELCAST_INSTANCE;
+    }
+
+    public static CommSystem getCommSystem() {
+        return commSystem;
     }
 
     public static void notifyStartupComplete() {

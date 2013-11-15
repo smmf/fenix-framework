@@ -65,7 +65,8 @@
         <version.ojb>1.0.0-escaped</version.ojb>
         <version.rhq.helpers>3.0.4</version.rhq.helpers>
         <version.slf4j.api>1.7.2</version.slf4j.api>
-
+        <version.jeromq>0.3.2-SNAPSHOT</version.jeromq>
+        
         <!-- Used in surefire plugin -->
         <!-- to play on the safe side when do not run tests in parallel. To do so run maven, e.g. with -DforkCount=1.5C -->
         <forkCount>1</forkCount>
@@ -392,6 +393,17 @@
             <snapshots>
                 <enabled>false</enabled>
                 <updatePolicy>never</updatePolicy>
+            </snapshots>
+        </repository>
+
+        <repository>
+            <id>sonatype-nexus-snapshots</id>
+            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
             </snapshots>
         </repository>
     </repositories>

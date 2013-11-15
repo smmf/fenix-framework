@@ -42,8 +42,8 @@ public class JvstmLockFreeConfig extends JVSTMConfig {
     /**
      * This <strong>optional</strong> parameter specifies the group communication system to use to broadcast the commit requests.
      * The value should be the name of a class that implements
-     * pt.ist.fenixframework.backend.jvstm.comms.CommSystem. It defaults to
-     * pt.ist.fenixframework.backend.jvstm.comms.HazelcastCommSystem.
+     * pt.ist.fenixframework.backend.jvstm.comms.zmq.CommSystem. It defaults to
+     * pt.ist.fenixframework.backend.jvstm.comms.hazelcast.HazelcastCommSystem.
      */
     protected String commSystemClassName = HazelcastCommSystem.class.getCanonicalName();
 

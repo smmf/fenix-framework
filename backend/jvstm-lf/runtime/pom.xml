@@ -69,6 +69,11 @@
             <groupId>com.hazelcast</groupId>
             <artifactId>hazelcast</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.zeromq</groupId>
+            <artifactId>jeromq</artifactId>
+            <version>${version.jeromq}</version>
+        </dependency>
     </dependencies>
 
 </project>
