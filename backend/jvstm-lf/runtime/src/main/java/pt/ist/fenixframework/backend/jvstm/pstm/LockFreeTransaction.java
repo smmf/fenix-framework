@@ -404,8 +404,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
 //            System.out.println("{C} tries=" + this.tries + " T1=" + this.T1 + " T2=" + this.T2 + " T3=" + this.T3 + " T4="
 //                    + this.T4 + " T5=" + this.T5);
-            System.out.println("{C}," + this.tries + "," + this.T1 + "," + this.T2 + "," + this.T3 + "," + this.T4 + ","
-                    + this.T4_1 + "," + this.T4_2 + "," + this.T5);
+//            System.out.println("{C}," + this.tries + "," + this.T1 + "," + this.T2 + "," + this.T3 + "," + this.T4 + ","
+//                    + this.T4_1 + "," + this.T4_2 + "," + this.T5);
 // From TopLevelTransaction:
             upgradeTx(getCommitTxRecord());  // commitTxRecord was set by the helper LocalCommitOnlyTransaction 
         }
@@ -666,7 +666,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         CommitRequest next = null;
         long startTime = System.nanoTime();
         while ((next = lastProcessedRequest.getNext()) == null) {
-//            Thread.yield();
+            Thread.yield();
             if (startTime != 0 && checkSyncTimeout(startTime)) {
                 startTime = 0;
             }

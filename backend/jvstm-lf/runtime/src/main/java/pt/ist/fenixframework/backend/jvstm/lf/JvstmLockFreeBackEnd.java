@@ -87,9 +87,9 @@ public class JvstmLockFreeBackEnd extends JVSTMBackEnd {
 
     @Override
     protected void localInit(JVSTMConfig jvstmConfig, int serverId, boolean firstNode) {
-        if (firstNode) {
-            LockFreeClusterUtils.getCommSystem().startSequencer();
-        }
+//        if (firstNode) {
+//            LockFreeClusterUtils.getCommSystem().startSequencer();
+//        }
         super.localInit(jvstmConfig, serverId, firstNode);
     }
 

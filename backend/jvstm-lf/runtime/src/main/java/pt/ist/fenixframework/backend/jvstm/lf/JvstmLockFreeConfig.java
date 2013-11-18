@@ -47,12 +47,23 @@ public class JvstmLockFreeConfig extends JVSTMConfig {
      */
     protected String commSystemClassName = HazelcastCommSystem.class.getCanonicalName();
 
+    protected String sequencerPublishAddress = "tcp://localhost:5556";
+    protected String sequencerPullAddress = "tcp://localhost:5557";
+
     public String getHazelcastConfigFile() {
         return this.hazelcastConfigFile;
     }
 
     public String getCommSystemClassName() {
         return this.commSystemClassName;
+    }
+
+    public String getSequencerPublishAddress() {
+        return this.sequencerPublishAddress;
+    }
+
+    public String getSequencerPullAddress() {
+        return this.sequencerPullAddress;
     }
 
     /**

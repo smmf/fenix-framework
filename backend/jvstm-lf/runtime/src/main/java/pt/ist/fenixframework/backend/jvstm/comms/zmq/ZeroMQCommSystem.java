@@ -6,9 +6,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.ZMQ;
 
+import pt.ist.fenixframework.FenixFramework;
 import pt.ist.fenixframework.backend.jvstm.comms.CommSystem;
 import pt.ist.fenixframework.backend.jvstm.comms.MessageProcessor;
 import pt.ist.fenixframework.backend.jvstm.lf.CommitRequest;
+import pt.ist.fenixframework.backend.jvstm.lf.JvstmLockFreeConfig;
 
 public class ZeroMQCommSystem implements CommSystem {
 
@@ -24,11 +26,11 @@ public class ZeroMQCommSystem implements CommSystem {
         this.context = ZMQ.context(1);
 
         this.subscriber = this.context.socket(ZMQ.SUB);
-        this.subscriber.connect("tcp://localhost:5556");
+        this.subscriber.connect(FenixFramework.<JvstmLockFreeConfig> getConfig().getSequencerPublishAddress());
         this.subscriber.subscribe(new byte[0]);
 
         this.request = this.context.socket(ZMQ.PUSH);
-        this.request.connect("tcp://localhost:5557");
+        this.request.connect(FenixFramework.<JvstmLockFreeConfig> getConfig().getSequencerPullAddress());
 
         new Thread() {
             @Override
@@ -59,7 +61,7 @@ public class ZeroMQCommSystem implements CommSystem {
 
     @Override
     public void sendMessage(byte[] data) {
-        System.out.printf("I'm sending a message with %d bytes\n", data.length);
+//        System.out.printf("I'm sending a message with %d bytes\n", data.length);
         this.request.send(data, 0);
         //System.out.println("DONE");
     }
