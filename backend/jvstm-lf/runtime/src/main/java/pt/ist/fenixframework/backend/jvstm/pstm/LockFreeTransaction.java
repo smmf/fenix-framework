@@ -51,6 +51,8 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
     private boolean readOnly = false;
 
+    private Set<String> readSetIndex = null;
+
     /**
      * Commit requests seen has undecided that may later be sent has benign requests in this transaction's commit request
      */
@@ -411,10 +413,34 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
         }
     }
 
+    private void makeReadSetIndex() {
+        if (this.readSetIndex == null) {
+            this.readSetIndex = new HashSet<>();
+
+            if (!this.bodiesRead.isEmpty()) {
+                // the first may not be full
+                jvstm.VBox[] array = this.bodiesRead.first();
+                for (int i = next + 1; i < array.length; i++) {
+                    this.readSetIndex.add(((VBox) array[i]).getId());
+                }
+
+                // the rest are full
+                for (jvstm.VBox[] ar : bodiesRead.rest()) {
+                    for (jvstm.VBox element : ar) {
+                        this.readSetIndex.add(((VBox) element).getId());
+                    }
+                }
+            }
+        }
+    }
+
     /* iterates the undecidedMaybeBenign requests and for those that haven't yet
     been tested, checks whether they are benign (i.e. their write set does not
     intersect with my read set).  Side-effect: the set of tested requests is updated */
     private Set<UUID> selectBenignRequestsToSend() {
+        // index the read set before searching it
+        makeReadSetIndex();
+
         Set<UUID> benignIds = new HashSet<>();
 
         for (CommitRequest commitRequest : this.undecidedMaybeBenign.values()) {
@@ -481,27 +507,7 @@ public class LockFreeTransaction extends ConsistentTopLevelTransaction implement
 
     // Compute whether this tx's read set contains the given vboxId
     private boolean readSetContains(String vboxId) {
-        if (!this.bodiesRead.isEmpty()) {
-            // the first may not be full
-            jvstm.VBox[] array = this.bodiesRead.first();
-            for (int i = next + 1; i < array.length; i++) {
-                String id = ((VBox) array[i]).getId();
-                if (id.equals(vboxId)) {
-                    return true;
-                }
-            }
-
-            // the rest are full
-            for (jvstm.VBox[] ar : bodiesRead.rest()) {
-                for (jvstm.VBox element : ar) {
-                    String id = ((VBox) element).getId();
-                    if (id.equals(vboxId)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
+        return this.readSetIndex.contains(vboxId);
     }
 
     private static void persistWriteSet(CommitRequest commitRequest) {
